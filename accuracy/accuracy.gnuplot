@@ -1,5 +1,5 @@
 #!/usr/bin/gnuplot
-set terminal png size 430,300 font "Arial,8"
+set terminal png size 860,600 font "Arial,8"
 set datafile separator ","
 set datafile missing "-"
 set key noenhanced
@@ -22,6 +22,5 @@ err(x,real) = (real != 0) ? abs((x - real)/real) * 100 : (x != 0) ? "-" : 0;
 set output "accuracy-".SERIES.".png"
 set title 'Δ '.SERIES
 
-plot DATA_FILE using 1:(err($6,$2)) with linespoints, \
-     DATA_FILE using 1:(err($5,$2)) with linespoints, \
-     DATA_FILE using 1:(err($7,$2)) with linespoints
+#plot for [COL=3:10] DATA_FILE using 1:(err(column(COL),$2)) with linespoints
+plot for [COL=4:9] DATA_FILE using 1:(err(column(COL),$2)) with linespoints

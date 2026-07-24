@@ -9,9 +9,10 @@ It is designed to serve as a drop-in replacement for floating-point types and ai
 ## Usage
 `fpm` defines the `fpm::fixed` class, which is templated on the underlying integer type and the number of bits in the fraction:
 ```c++
-namespace fpm {
-    template <typename BaseType, typename IntermediateType, unsigned int FractionBits>
-    class fixed;
+namespace fpm
+{
+	template<typename BaseType, typename IntermediateType, uint32_t FractionBits>
+	struct fixed;
 }
 ```
 **Note:** It's recommended to use a *signed* integer type for `BaseType` (and `IntermediateType`) to emulate floating-point numbers
@@ -30,10 +31,11 @@ This defines a signed 16.16 fixed-point number with a range of -32768 to 32767.9
 
 For your convenience, several popular fixed-point formats have been defined in the `fpm` namespace:
 ```c++
-namespace fpm {
-    using fixed_16_16 = fixed<std::int32_t, std::int64_t, 16>;  // Q16.16 format
-    using fixed_24_8  = fixed<std::int32_t, std::int64_t, 8>;   // Q24.8 format
-    using fixed_8_24  = fixed<std::int32_t, std::int64_t, 24>;  // Q8.24 format
+namespace fpm
+{
+	using fixed_16_16 = fixed<std::int32_t, std::int64_t, 16>;  // Q16.16 format
+	using fixed_24_8  = fixed<std::int32_t, std::int64_t, 8>;   // Q24.8 format
+	using fixed_8_24  = fixed<std::int32_t, std::int64_t, 24>;  // Q8.24 format
 }
 ```
 
@@ -89,10 +91,11 @@ For instance, the following program prints `"===3.142e+02"`:
 #include <iostream>
 #include <iomanip>
 
-int main() {
-    fpm::fixed_16_16 x { 314.1516 };
-    std::cout << std::setw(12) << std::setfill('=') << std::setprecision(3) << std::scientific << x << std::endl;
-    return 0;
+int main()
+{
+	fpm::fixed_16_16 x { 314.1516 };
+	std::cout << std::setw(12) << std::setfill('=') << std::setprecision(3) << std::scientific << x << std::endl;
+	return 0;
 }
 ```
 

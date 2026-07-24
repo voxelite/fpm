@@ -1,12 +1,16 @@
-cmake_minimum_required(VERSION 3.9)
+cmake_minimum_required(VERSION 3.25)
 
-project(fpm)
+project(fpm C CXX)
 
 include(GNUInstallDirs)
 
-set(CMAKE_CXX_STANDARD 11)
-
 add_library(fpm INTERFACE)
+
+set_target_properties(fpm PROPERTIES
+  CXX_STANDARD 26
+  CXX_STANDARD_REQUIRED ON
+)
+target_compile_features(fpm INTERFACE cxx_std_26)
 
 target_include_directories(fpm INTERFACE include)
 
@@ -14,14 +18,15 @@ install(FILES
   include/fpm/fixed.hpp
   include/fpm/ios.hpp
   include/fpm/math.hpp
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fpm)
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fpm
+)
 
 OPTION(BUILD_ACCURACY  "fpm accuracy"  ON)
 OPTION(BUILD_BENCHMARK "fpm benchmark" ON)
 OPTION(BUILD_TESTS     "fpm tests"     ON)
 
 # only build tests & benchmarks if a top-level project
-if (NOT CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+if(NOT CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   set(BUILD_ACCURACY  OFF)
   set(BUILD_BENCHMARK OFF)
   set(BUILD_TESTS     OFF)
@@ -30,30 +35,34 @@ endif()
 #
 # Test suite
 #
-if (BUILD_TESTS)
-enable_testing()
-include(GoogleTest)
+if(BUILD_TESTS)
+  enable_testing()
+  include(GoogleTest)
 
-add_executable(fpm-test
-  tests/arithmetic.cpp
-  tests/arithmetic_int.cpp
-  tests/basic_math.cpp
-  tests/constants.cpp
-  tests/conversion.cpp
-  tests/classification.cpp
-  tests/customizations.cpp
-  tests/detail.cpp
-  tests/from.cpp
-  tests/input.cpp
-  tests/manip.cpp
-  tests/nearest.cpp
-  tests/output.cpp
-  tests/power.cpp
-  tests/trigonometry.cpp
-)
-set_target_properties(fpm-test PROPERTIES CXX_STANDARD 11)
-target_link_libraries(fpm-test PRIVATE fpm gtest_main)
-gtest_add_tests(TARGET fpm-test)
+  add_executable(fpm-test
+    tests/arithmetic.cpp
+    tests/arithmetic_int.cpp
+    tests/basic_math.cpp
+    tests/constexpr.cpp
+    tests/constants.cpp
+    tests/conversion.cpp
+    tests/classification.cpp
+    tests/customizations.cpp
+    tests/detail.cpp
+    tests/formatting.cpp
+    tests/formatting_wchar.cpp
+    tests/fraction_only.cpp
+    tests/from.cpp
+    tests/input.cpp
+    tests/int128.cpp
+    tests/manip.cpp
+    tests/nearest.cpp
+    tests/output.cpp
+    tests/power.cpp
+    tests/trigonometry.cpp
+    tests/type_conversion.cpp
+  )
+  target_link_libraries(fpm-test PUBLIC fpm gtest_main)
 
 endif()
 
@@ -62,100 +71,102 @@ endif()
 #
 include(ExternalProject)
 
-if (BUILD_ACCURACY OR BUILD_BENCHMARK)
+if(BUILD_ACCURACY OR BUILD_BENCHMARK)
 
-# Libfixmath uses a Makefile with hardcoded compiler (gcc).
-# So we need to define our own build rules.
-set(LIBFIXMATH_ROOT "${CMAKE_CURRENT_BINARY_DIR}/libfixmath")
+  # Libfixmath uses a Makefile with hardcoded compiler (gcc).
+  # So we need to define our own build rules.
+  set(LIBFIXMATH_ROOT "${CMAKE_CURRENT_BINARY_DIR}/libfixmath")
 
-ExternalProject_Add(libfixmath-external
-  GIT_REPOSITORY "https://github.com/PetteriAimonen/libfixmath.git"
-  GIT_TAG bada934981a5961569ad2cb6b9006ed94542cc9c
-  PREFIX ${LIBFIXMATH_ROOT}
-  CONFIGURE_COMMAND ""
-  BUILD_COMMAND ""
-  INSTALL_COMMAND ""
-)
+  ExternalProject_Add(libfixmath-external
+    GIT_REPOSITORY "https://github.com/PetteriAimonen/libfixmath.git"
+    GIT_TAG bada934981a5961569ad2cb6b9006ed94542cc9c
+    PREFIX ${LIBFIXMATH_ROOT}
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND ""
+    INSTALL_COMMAND ""
+  )
 
-set(LIBFIXMATH_SOURCES
-  ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16.c
-  ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16_exp.c
-  ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16_sqrt.c
-  ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16_str.c
-  ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16_trig.c
-  ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fract32.c
-  ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/uint32.c
-)
-set_source_files_properties(${LIBFIXMATH_SOURCES} PROPERTIES GENERATED TRUE)
-add_library(libfixmath ${LIBFIXMATH_SOURCES})
+  set(LIBFIXMATH_SOURCES
+    ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16.c
+    ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16_exp.c
+    ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16_sqrt.c
+    ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16_str.c
+    ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fix16_trig.c
+    ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/fract32.c
+    ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath/uint32.c
+  )
+  set_source_files_properties(${LIBFIXMATH_SOURCES} PROPERTIES GENERATED TRUE)
+  add_library(libfixmath ${LIBFIXMATH_SOURCES})
 
-# Set libfixmath compile options to match fpm functionality
-target_compile_definitions(libfixmath
-  PUBLIC
-    FIXMATH_NO_CACHE        # No caching of results
+  # Set libfixmath compile options to match fpm functionality
+  target_compile_definitions(libfixmath
+    PUBLIC
+      FIXMATH_NO_CACHE        # No caching of results
 
-    #FIXMATH_NO_OVERFLOW    # We want no runtime-overflow detection, but it fails to compile
-    #FIXMATH_NO_ROUNDING    # We do want rounding
-    #FIXMATH_NO_64BIT       # We do want 64-bit integer support
-    #FIXMATH_OPTIMIZE_8BIT  # No special 8-bit architecture optimizations
-    #FIXMATH_SIN_LUT        # No lookup table for sin
-    #FIXMATH_FAST_SIN       # Prefer accuracy over speed
-)
+      #FIXMATH_NO_OVERFLOW    # We want no runtime-overflow detection, but it fails to compile
+      #FIXMATH_NO_ROUNDING    # We do want rounding
+      #FIXMATH_NO_64BIT       # We do want 64-bit integer support
+      #FIXMATH_OPTIMIZE_8BIT  # No special 8-bit architecture optimizations
+      #FIXMATH_SIN_LUT        # No lookup table for sin
+      #FIXMATH_FAST_SIN       # Prefer accuracy over speed
+  )
 
-target_include_directories(libfixmath PUBLIC ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath)
-add_dependencies(libfixmath libfixmath-external)
+  target_include_directories(libfixmath PUBLIC ${LIBFIXMATH_ROOT}/src/libfixmath-external/libfixmath)
+  add_dependencies(libfixmath libfixmath-external)
 
 endif()
 
-if (BUILD_ACCURACY OR BUILD_BENCHMARK)
-#
-# CNL for alternative comparison
-#
-set(LIBCNL_ROOT "${CMAKE_CURRENT_BINARY_DIR}/libcnl")
+if(BUILD_ACCURACY OR BUILD_BENCHMARK)
+  #
+  # CNL for alternative comparison
+  #
+  set(LIBCNL_ROOT "${CMAKE_CURRENT_BINARY_DIR}/libcnl")
 
-ExternalProject_Add(libcnl-external
-  GIT_REPOSITORY "https://github.com/johnmcfarlane/cnl"
-  GIT_TAG 4d445566fe7c6c8939fffc145a2f30fd587796a6
-  PREFIX ${LIBCNL_ROOT}
-  CONFIGURE_COMMAND ""
-  BUILD_COMMAND ""
-  INSTALL_COMMAND ""
-)
+  ExternalProject_Add(libcnl-external
+    GIT_REPOSITORY "https://github.com/johnmcfarlane/cnl"
+    GIT_TAG 4d445566fe7c6c8939fffc145a2f30fd587796a6
+    PREFIX ${LIBCNL_ROOT}
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND ""
+    INSTALL_COMMAND ""
+  )
 
-add_library(libcnl INTERFACE)
-target_include_directories(libcnl INTERFACE ${LIBCNL_ROOT}/src/libcnl-external/include)
-add_dependencies(libcnl libcnl-external)
+  add_library(libcnl INTERFACE)
+  target_include_directories(libcnl INTERFACE ${LIBCNL_ROOT}/src/libcnl-external/include)
+  add_dependencies(libcnl libcnl-external)
 endif()
 
-if (BUILD_BENCHMARK)
-#
-# Benchmark tool.
-# Runs benchmarks of FPM operations and dumps results to standard output.
-#
-add_executable(fpm-benchmark
-	benchmarks/arithmetic.cpp
-	benchmarks/power.cpp
-	benchmarks/trigonometry.cpp
-)
-target_link_libraries(fpm-benchmark PRIVATE fpm libfixmath libcnl benchmark benchmark_main)
+if(BUILD_BENCHMARK)
+  #
+  # Benchmark tool.
+  # Runs benchmarks of FPM operations and dumps results to standard output.
+  #
+  add_executable(fpm-benchmark
+      benchmarks/arithmetic.cpp
+      benchmarks/arithmetic2.cpp
+      benchmarks/power.cpp
+      benchmarks/to_float.cpp
+      benchmarks/trigonometry.cpp
+  )
+  target_link_libraries(fpm-benchmark PRIVATE fpm libfixmath libcnl benchmark benchmark_main)
 endif()
 
-if (BUILD_ACCURACY)
-#
-# Accuracy tool.
-# Dumps the accuracy of approximated FPM functions to JSON files.
-#
-add_executable(fpm-accuracy
-	accuracy/accuracy.cpp
-)
-set_target_properties(fpm-accuracy PROPERTIES CXX_STANDARD 14)
-target_link_libraries(fpm-accuracy PRIVATE fpm libfixmath)
+if(BUILD_ACCURACY)
+  #
+  # Accuracy tool.
+  # Dumps the accuracy of approximated FPM functions to JSON files.
+  #
+  add_executable(fpm-accuracy
+      accuracy/accuracy.cpp
+  )
+  set_target_properties(fpm-accuracy PROPERTIES CXX_STANDARD 14)
+  target_link_libraries(fpm-accuracy PRIVATE fpm libfixmath)
 endif()
 
 set(DATA_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
 include(FindGnuplot)
-if (GNUPLOT_FOUND AND BUILD_ACCURACY)
+if(GNUPLOT_FOUND AND BUILD_ACCURACY)
   # Create accuracy data
   set(DATA_FILES_ACCURACY "")
   set(IMG_FILES_ACCURACY "")
@@ -190,7 +201,7 @@ if (GNUPLOT_FOUND AND BUILD_ACCURACY)
   add_custom_target(fpm-accuracy-images DEPENDS ${IMG_FILES_ACCURACY})
 endif()
 
-if (CMAKE_BUILD_TYPE STREQUAL "Release" AND GNUPLOT_FOUND AND BUILD_BENCHMARK)
+if(CMAKE_BUILD_TYPE STREQUAL "Release" AND GNUPLOT_FOUND AND BUILD_BENCHMARK)
   # Enable the performance data-generation command only for Release builds.
 
   set(DATA_FILE_PERFORMANCE_JSON ${DATA_DIR}/performance.json)
@@ -226,10 +237,10 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release" AND GNUPLOT_FOUND AND BUILD_BENCHMARK)
   add_custom_target(fpm-performance-images DEPENDS ${IMG_FILE_PERFORMANCE})
 endif()
 
-if (BUILD_BENCHMARK)
+if(BUILD_BENCHMARK)
   add_subdirectory(3rdparty/googlebench)
 endif()
 
-if (BUILD_TESTS)
+if(BUILD_TESTS)
   add_subdirectory(3rdparty/googletest)
 endif()

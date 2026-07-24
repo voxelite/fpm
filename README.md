@@ -26,12 +26,13 @@ types as if they were native floating-pointer types:
 #include <fpm/ios.hpp>    // For fpm::operator<<
 #include <iostream>       // For std::cin, std::cout
 
-int main() {
-    std::cout << "Please input a number: ";
-    fpm::fixed_16_16 x;
-    std::cin >> x;
-    std::cout << "The cosine of " << x << " radians is: " << cos(x) << std::endl;
-    return 0;
+int main()
+{
+	std::cout << "Please input a number: ";
+	fpm::fixed_16_16 x;
+	std::cin >> x;
+	std::cout << "The cosine of " << x << " radians is: " << cos(x) << std::endl;
+	return 0;
 }
 ```
 
