@@ -778,6 +778,7 @@ namespace fpm
 		constexpr auto IntBits = sizeof(B) * 8 - F - (IsSigned ? 1 : 0);
 		constexpr auto MaxInt = (I{1} << IntBits) - 1;
 		constexpr auto MaxFraction = (I{1} << F) - 1;
+		constexpr auto MaxDivisor = std::numeric_limits<I>::max() >> (F + 1); ///< `fraction << F` must not overflow `I` (fraction < divisor)
 		constexpr auto MaxValue = (I{1} << sizeof(B) * 8) - 1;
 
 		// Parse the integer part
@@ -800,7 +801,7 @@ namespace fpm
 		for(std::size_t i = fraction_start; i < significand.size(); ++i)
 		{
 			assert(significand[i] < base);
-			if(divisor > MaxFraction / base)
+			if(divisor > MaxDivisor / base)
 			{
 				// We're done
 				break;
@@ -810,7 +811,7 @@ namespace fpm
 		}
 
 		// Construct the value from the parsed parts
-		I raw_value = (integer << F) + (fraction << F) / divisor;
+		I raw_value = (integer << F) + ((fraction << F) + (R ? divisor / 2 : 0)) / divisor;
 
 		// Apply remaining exponent
 		if(exponent_char == 'p')
