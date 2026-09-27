@@ -12,6 +12,14 @@
 
 #include "fixed.hpp"
 
+// Code-layout hints for GCC, from measurements: some small functions give GCC better code in their callers
+// when they are not inlined. This never changes results (all compilers compute exactly the same values).
+#if defined(__GNUC__) && !defined(__clang__)
+	#define FPM_DETAIL_GCC_NOINLINE [[gnu::noinline]]
+#else
+	#define FPM_DETAIL_GCC_NOINLINE
+#endif
+
 namespace fpm
 {
 	#pragma region Helper functions
@@ -325,10 +333,13 @@ namespace fpm
 
 	#pragma region Mathematical functions
 
-	template<std::signed_integral B, typename I, uint32_t F, bool R>
+	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> abs(fixed<B, I, F, R> x) noexcept
 	{
-		return (x >= fixed<B, I, F, R>{0}) ? x : -x;
+		if constexpr(std::is_signed_v<B>)
+			return (x >= fixed<B, I, F, R>{0}) ? x : -x;
+		else
+			return x; // unsigned values are never negative
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -338,7 +349,7 @@ namespace fpm
 		if constexpr(std::is_signed_v<B>)
 		{
 			// `lowest() % -1` overflows, but any value modulo -1 is 0
-			if(y.raw_value() == -1)
+			if(y.raw_value() == -1) [[unlikely]]
 				return fixed<B, I, F, R>::from_raw_value(0);
 		}
 		return fixed<B, I, F, R>::from_raw_value(static_cast<B>(x.raw_value() % y.raw_value()));
@@ -455,7 +466,7 @@ namespace fpm
 				bool too_large = raw > max_square_root;
 				if constexpr(std::is_signed_v<B>)
 					too_large = too_large || raw < -max_square_root;
-				if(too_large)
+				if(too_large) [[unlikely]]
 				{
 					base = Fixed(1) / base;
 					divide = false;
@@ -496,7 +507,11 @@ namespace fpm
 		// exp2(log2(base) * exp). The product can exceed the range of the type while the result is representable
 		// (e.g. tiny results), so it's calculated in the intermediate type and saturated.
 		const I product = static_cast<I>(log2(base).raw_value()) * exp.raw_value();
-		const I exponent = R ? ((product + (I{1} << (F - 1))) >> F) : (product / (I{1} << F));
+		I exponent;
+		if constexpr(R)
+			exponent = (product + (I{1} << (F - 1))) >> F;
+		else
+			exponent = product / (I{1} << F); // truncate towards zero
 		if(exponent > static_cast<I>(std::numeric_limits<B>::max()))
 			return std::numeric_limits<Fixed>::max();
 		if(exponent < static_cast<I>(std::numeric_limits<B>::lowest()))
@@ -515,7 +530,7 @@ namespace fpm
 		constexpr int32_t integral_bits = std::numeric_limits<B>::digits - static_cast<int32_t>(F);
 		constexpr auto ln2 = Fixed::template from_fixed_point<63>(int64_t{6393154322601327830}); // 0.69314718055994530942
 		constexpr auto overflow_threshold = ln2 * integral_bits;
-		if(x >= overflow_threshold)
+		if(x >= overflow_threshold) [[unlikely]]
 			return max;
 
 		if constexpr(std::is_signed_v<B>)
@@ -567,7 +582,7 @@ namespace fpm
 		assert(f >= Fixed(0) && f < Fixed(1));
 
 		// 2^n * 2^f is a shift of 2^f
-		if(n >= 0 && n > std::numeric_limits<B>::digits - static_cast<int32_t>(F) - 1)
+		if(n >= 0 && n > std::numeric_limits<B>::digits - static_cast<int32_t>(F) - 1) [[unlikely]]
 			return std::numeric_limits<Fixed>::max(); // 2^f >= 1 would be shifted out of range
 
 		// 2^f in [1, 2), with M fraction bits
@@ -590,7 +605,7 @@ namespace fpm
 		// Result in QF: exp2_f * 2^n / 2^(M-F), rounded to nearest. exp2_f is positive and below 2^(M+1),
 		// so this is done in the unsigned type of the base's width (no wider arithmetic needed).
 		// n is below the range checked above, and results below 2^-(F+1) round to zero, so the shift fits in 32 bits.
-		if(n < -static_cast<B>(F) - 1)
+		if(n < -static_cast<B>(F) - 1) [[unlikely]]
 			return Fixed(0);
 		using U = std::make_unsigned_t<B>;
 		const auto mantissa = static_cast<U>(exp2_f);
@@ -706,19 +721,19 @@ namespace fpm
 		};
 
 		// One step: root = 2 * root (+ 1), with remainder = N' - root^3 of the bits consumed so far
+		// Branch-free: whether the next bit is set is unpredictable, so a branch would often be mispredicted
 		const auto step = [](auto& root, auto& root_squared, auto& remainder, const auto bits)
 		{
-			remainder = static_cast<std::remove_reference_t<decltype(remainder)>>((remainder << 3) | bits);
-			root <<= 1;
-			root_squared <<= 2;
+			using T = std::remove_reference_t<decltype(remainder)>;
+			remainder = static_cast<T>((remainder << 3) | bits);
+			root = static_cast<T>(root << 1);
+			root_squared = static_cast<T>(root_squared << 2);
 			// (root + 1)^3 - root^3
-			const auto next = 3 * (root_squared + root) + 1;
-			if(remainder >= next)
-			{
-				remainder -= next;
-				root_squared += 2 * root + 1;
-				++root;
-			}
+			const auto next = static_cast<T>(3 * (root_squared + root) + 1);
+			const auto mask = static_cast<T>(-static_cast<T>(remainder >= next)); // all ones if the bit is set
+			remainder = static_cast<T>(remainder - (next & mask));
+			root_squared = static_cast<T>(root_squared + ((2 * root + 1) & mask));
+			root = static_cast<T>(root - mask);
 		};
 
 		W root = 0;
@@ -810,7 +825,7 @@ namespace fpm
 		constexpr auto max = std::numeric_limits<Fixed>::max();
 		const I a2 = a * a;
 		const I b2 = b * b;
-		if(b2 > std::numeric_limits<I>::max() - a2)
+		if(b2 > std::numeric_limits<I>::max() - a2) [[unlikely]]
 			return max;
 		const I result = detail::sqrt_rounded(a2 + b2);
 		return result > static_cast<I>(max.raw_value()) ? max : Fixed::from_raw_value(static_cast<B>(result));
@@ -860,7 +875,17 @@ namespace fpm
 
 			const auto x = Fixed::from_raw_value(static_cast<B>(u));
 			const Fixed x2 = x*x;
-			const Fixed result = x * (Fixed::pi() - x2*(Fixed::two_pi() - 5 - x2*(Fixed::pi() - 3)))/2;
+			// Compile-time constants. Subtracted with modular arithmetic, so this is a valid constant expression
+			// even for types that cannot represent them (e.g. a single integral bit), like at runtime.
+			using U = std::make_unsigned_t<B>;
+			constexpr auto subtract = [](const Fixed x, const Fixed y)
+			{
+				return Fixed::from_raw_value(static_cast<B>(static_cast<U>(static_cast<U>(x.raw_value()) - static_cast<U>(y.raw_value()))));
+			};
+			constexpr Fixed a = Fixed::pi();
+			constexpr Fixed b = subtract(Fixed::two_pi(), Fixed(5));
+			constexpr Fixed c = subtract(Fixed::pi(), Fixed(3));
+			const Fixed result = x * (a - x2*(b - x2*c))/2;
 			// (Negated via the raw value, so this compiles for unsigned base types as well)
 			return negative ? Fixed::from_raw_value(static_cast<B>(B{0} - result.raw_value())) : result;
 		}
@@ -899,17 +924,30 @@ namespace fpm
 
 		/// Calculates atan(x) assuming that x is in the range [0,1].
 		template<typename B, typename I, uint32_t F, bool R>
-		[[nodiscard]] inline constexpr fixed<B, I, F, R> atan_sanitized(fixed<B, I, F, R> x) noexcept
+		[[nodiscard]] FPM_DETAIL_GCC_NOINLINE inline constexpr fixed<B, I, F, R> atan_sanitized(fixed<B, I, F, R> x) noexcept
 		{
 			using Fixed = fixed<B, I, F, R>;
 			assert(x >= Fixed(0) && x <= Fixed(1));
 
-			constexpr auto fA = Fixed::template from_fixed_point<63>(  int64_t{716203666280654660}); //  0.0776509570923569
-			constexpr auto fB = Fixed::template from_fixed_point<63>(-int64_t{2651115102768076601}); // -0.287434475393028
-			constexpr auto fC = Fixed::template from_fixed_point<63>( int64_t{9178930894564541004}); //  0.995181681698119  (PI/4 - A - B)
+			// Evaluated with extra fraction bits (see poly_bits): all values are within [-1, 1]
+			using S = std::make_signed_t<B>;
+			constexpr int32_t M = poly_bits<B, 1, F>;
+			constexpr auto multiply = poly_multiply<I, M, S>;
+			constexpr auto coefficient = poly_coefficient<B, M>;
+			constexpr S fA = coefficient(  int64_t{716203666280654660}, 63); //  0.0776509570923569
+			constexpr S fB = coefficient(-int64_t{2651115102768076601}, 63); // -0.287434475393028
+			constexpr S fC = coefficient( int64_t{9178930894564541004}, 63); //  0.995181681698119  (PI/4 - A - B)
 
-			const auto xx = x * x;
-			return ((fA*xx + fB)*xx + fC)*x;
+			const auto xm = static_cast<S>(static_cast<S>(x.raw_value()) << (M - static_cast<int32_t>(F)));
+			const S xx = multiply(xm, xm);
+			const S result = multiply(static_cast<S>(multiply(static_cast<S>(multiply(fA, xx) + fB), xx) + fC), xm);
+
+			// Round from QM to QF, in S: the result is at most 1 (2^M), so adding half a unit cannot overflow
+			constexpr int32_t shift = M - static_cast<int32_t>(F);
+			if constexpr(shift == 0)
+				return Fixed::from_raw_value(static_cast<B>(result));
+			else
+				return Fixed::from_raw_value(static_cast<B>(static_cast<S>(result + (S{1} << (shift - 1))) >> shift));
 		}
 
 		/// Calculate atan(y / x), assuming x != 0.
@@ -951,7 +989,7 @@ namespace fpm
 
 	}
 
-	template<std::signed_integral B, typename I, uint32_t F, bool R>
+	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> atan(fixed<B, I, F, R> x) noexcept
 	{
 		using Fixed = fixed<B, I, F, R>;
@@ -972,7 +1010,9 @@ namespace fpm
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> asin(fixed<B, I, F, R> x) noexcept
 	{
 		using Fixed = fixed<B, I, F, R>;
-		assert(x >= Fixed(-1) && x <= Fixed(+1));
+		assert(x <= Fixed(+1));
+		if constexpr(std::is_signed_v<B>)
+			assert(x >= Fixed(-1));
 
 		const auto yy = 1 - x * x;
 		if(yy == Fixed(0))
@@ -986,9 +1026,11 @@ namespace fpm
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> acos(fixed<B, I, F, R> x) noexcept
 	{
 		using Fixed = fixed<B, I, F, R>;
-		assert(x >= Fixed(-1) && x <= Fixed(+1));
+		assert(x <= Fixed(+1));
+		if constexpr(std::is_signed_v<B>)
+			assert(x >= Fixed(-1));
 
-		if(x == Fixed(-1))
+		if(std::is_signed_v<B> && x == -Fixed(1))
 		{
 			return Fixed::pi();
 		}

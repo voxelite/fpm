@@ -336,3 +336,28 @@ TEST(math_types, constexpr_evaluation)
 	static_assert(abs(exp(P(1)) - P::e()) < P(0.001));
 	static_assert(abs(atan2(P(1), P(1)) - P::pi() / 4) < P(0.001));
 }
+
+TEST(math_types, unsigned_base_types)
+{
+	// Operations on unsigned base types: correct for representable (non-negative) results;
+	// negation wraps around like for unsigned integers
+	using U = fpm::fixed<uint32_t, uint64_t, 16>;
+	constexpr long double tolerance = 2e-3L;
+	for(const double v : {0.0, 0.25, 0.5, 0.75, 1.0})
+	{
+		EXPECT_TRUE(within(ld(asin(U(v))), std::asin(static_cast<long double>(v)), tolerance)) << v;
+		EXPECT_TRUE(within(ld(acos(U(v))), std::acos(static_cast<long double>(v)), tolerance)) << v;
+	}
+	for(const double v : {0.0, 0.5, 1.0, 2.0, 100.0, 30000.0})
+	{
+		EXPECT_EQ(U(v), abs(U(v)));
+		EXPECT_EQ(U(v), copysign(U(v), U(1)));
+		EXPECT_TRUE(within(ld(atan(U(v))), std::atan(static_cast<long double>(v)), tolerance)) << v;
+		EXPECT_TRUE(within(ld(atan2(U(v), U(1))), std::atan2(static_cast<long double>(v), 1.0L), tolerance)) << v;
+		EXPECT_TRUE(within(ld(cbrt(U(v))), std::cbrt(static_cast<long double>(v)), eps<U>)) << v;
+		EXPECT_TRUE(within(ld(sqrt(U(v))), std::sqrt(static_cast<long double>(v)), eps<U>)) << v;
+	}
+	EXPECT_EQ(uint32_t{0} - U(1.5).raw_value(), (-U(1.5)).raw_value());
+	static_assert(abs(U(3)) == U(3));
+	static_assert((-(-U(3))) == U(3));
+}

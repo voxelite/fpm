@@ -6,6 +6,7 @@
 #include <charconv>
 #include <format>
 #include <random>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -568,3 +569,68 @@ TEST(charconv, format_default_is_shortest)
 	// With a precision, the general format of the stream operator is used
 	EXPECT_EQ("0.100006", std::format("{:.6}", P(0.1)));
 }
+
+#ifdef FPM_INT128
+namespace
+{
+	/// Parses the exact decimal expansions of values with 8 more fraction bits than P: long inputs near grid points,
+	/// near midpoints and exactly on them. The expected result is the finer value rounded (ties to even) or truncated.
+	template<typename P>
+	void check_long_inputs()
+	{
+		using B = typename P::base_type;
+		constexpr auto F = P::fraction_bits;
+		using Fine = fpm::fixed<int64_t, FPM_INT128, F + 8>;
+		std::mt19937_64 rng(5 + F);
+		std::array<char, 256> buffer{};
+		for(int i = 0; i < 20000; ++i)
+		{
+			const auto raw = static_cast<B>(static_cast<int64_t>(rng() >> 40) - (int64_t{1} << 23));
+			const int64_t delta = (i % 4 == 0) ? static_cast<int64_t>(rng() % 256) - 128                          // anywhere
+				: (i % 4 == 1) ? static_cast<int64_t>(rng() % 5) - 2                                               // near the grid point
+				: (i % 4 == 2) ? 128 + static_cast<int64_t>(rng() % 5) - 2                                         // near the midpoint
+				: 128;                                                                                              // tie
+			const int64_t fine_raw = static_cast<int64_t>(raw) * 256 + delta;
+			const auto fine = Fine::from_raw_value(fine_raw);
+
+			// The exact expansion: F + 8 fractional digits
+			const auto result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), fine, std::chars_format::fixed, static_cast<int>(F) + 8);
+			ASSERT_EQ(result.ec, std::errc{});
+			const std::string_view text(buffer.data(), static_cast<std::size_t>(result.ptr - buffer.data()));
+
+			// Expected: fine_raw / 256 rounded to nearest (ties to even), or truncated towards zero
+			int64_t expected = fine_raw / 256;
+			int64_t remainder = fine_raw % 256;
+			if constexpr(P::enable_rounding)
+			{
+				if(remainder < 0) { remainder += 256; --expected; } // floor
+				if(remainder > 128 || (remainder == 128 && (expected & 1) != 0))
+					++expected;
+			}
+			if(expected > std::numeric_limits<B>::max() || expected < std::numeric_limits<B>::min())
+				continue;
+
+			P value{};
+			const auto parsed = fpm::from_chars(text.data(), text.data() + text.size(), value);
+			ASSERT_EQ(parsed.ec, std::errc{}) << text;
+			ASSERT_EQ(expected, static_cast<int64_t>(value.raw_value())) << text;
+
+			// The stream operator uses the same conversion
+			std::istringstream ss{std::string(text)};
+			P streamed{};
+			ss >> streamed;
+			ASSERT_EQ(value, streamed) << text;
+		}
+	}
+}
+
+TEST(charconv, long_inputs_are_exact)
+{
+	check_long_inputs<fpm::fixed_16_16>();
+	check_long_inputs<fpm::fixed_8_24>();
+	check_long_inputs<fpm::fixed_24_8>();
+	check_long_inputs<fpm::fixed<int32_t, int64_t, 16, false>>();
+	check_long_inputs<fpm::fixed<int32_t, int64_t, 24, false>>();
+	check_long_inputs<fpm::fixed<int32_t, int64_t, 28>>();
+}
+#endif

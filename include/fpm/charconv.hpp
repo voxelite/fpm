@@ -122,7 +122,9 @@ namespace fpm
 			decimal_for<B, F> d;
 
 			// Integral part
-			U integral = (static_cast<int32_t>(F) == N) ? U{0} : static_cast<U>(magnitude >> (F % N));
+			U integral = 0;
+			if constexpr(static_cast<int32_t>(F) < N)
+				integral = static_cast<U>(magnitude >> F);
 			std::array<uint8_t, std::numeric_limits<U>::digits10 + 1> reversed{};
 			int32_t n = 0;
 			while(integral != 0)
@@ -288,11 +290,14 @@ namespace fpm
 			const auto limit = max_magnitude<B>(negative);
 			if(mag > limit)
 				return {0, true};
-			if(R && half && (rest || (mag & 1) != 0))
+			if constexpr(R)
 			{
-				if(mag == limit)
-					return {0, true};
-				return {static_cast<magnitude_t<B>>(mag + 1), false};
+				if(half && (rest || (mag & 1) != 0))
+				{
+					if(mag == limit)
+						return {0, true};
+					return {static_cast<magnitude_t<B>>(mag + 1), false};
+				}
 			}
 			return {mag, false};
 		}
@@ -302,9 +307,10 @@ namespace fpm
 		template<typename I, uint32_t F>
 		inline constexpr int32_t fast_digits = []
 		{
+			// The largest n with 10^n <= max >> F
 			const I limit = std::numeric_limits<I>::max() >> F;
 			int32_t n = 0;
-			for(I p = 10; p <= limit / 10 + (limit % 10 == 9 ? 1 : 0) && n < 38; p *= 10)
+			for(I p = 1; p <= limit / 10; p *= 10)
 				++n;
 			return n;
 		}();
@@ -336,7 +342,7 @@ namespace fpm
 			for(int32_t i = 0; i < d.exponent; ++i)
 			{
 				const auto digit = static_cast<U>(i < d.count ? d.digits[i] : 0);
-				if(integral > static_cast<U>((std::numeric_limits<U>::max() - digit) / 10))
+				if(integral > static_cast<U>((std::numeric_limits<U>::max() - digit) / 10)) [[unlikely]]
 					return {0, true};
 				integral = static_cast<U>(integral * 10u + digit);
 			}
@@ -349,7 +355,9 @@ namespace fpm
 			{
 				return {0, true};
 			}
-			const U mag = (static_cast<int32_t>(F) == N) ? U{0} : static_cast<U>(integral << (F % N));
+			U mag = 0;
+			if constexpr(static_cast<int32_t>(F) < N)
+				mag = static_cast<U>(integral << F);
 
 			// Fractional part. Grid points need at most F fractional digits and the midpoints between
 			// them F+1, so the first F+1 digits plus a "non-zero digits follow" flag decide the rounding exactly.
@@ -397,15 +405,24 @@ namespace fpm
 				{
 					const I upper = static_cast<I>(remainder + (I{1} << F)); // exclusive bound with the tail
 					if(half)
-						rest_below = true; // strictly above one half
+					{
+						// Strictly above one half. When rounding, the result is the next grid point even if the tail
+						// carries into the next bit (the fraction then stays below 1.5, as 2^F < 10^L / 2).
+						rest_below = true;
+						constexpr bool small_tail = (I{1} << (F + 1)) < powers_of_10<I, F>[max_length]; // 2^F < 10^L / 2
+						if((!R || !small_tail) && upper > pow10)
+							decided = false; // truncating (or a large tail): whether it carries matters
+					}
 					else if(upper <= pow10 - upper)
+					{
 						rest_below = true; // strictly below one half, and not zero
+					}
 					else
-						decided = false; // (rare) the tail may cross one half or one: use the exact method below
-					if(upper > pow10)
-						decided = false;
+					{
+						decided = false; // (rare) the tail may cross one half: use the exact method below
+					}
 				}
-				if(decided)
+				if(decided) [[likely]]
 				{
 					const auto bits_value = static_cast<U>(quotient); // < 2^F
 					if(bits_value > limit - mag)
@@ -787,7 +804,8 @@ namespace fpm
 						break;
 				}
 			}
-			round_to(d, d.exponent + k, R ? rounding::nearest_even : rounding::away_from_zero);
+			constexpr auto mode = R ? rounding::nearest_even : rounding::away_from_zero;
+			round_to(d, d.exponent + k, mode);
 			return d;
 		}
 

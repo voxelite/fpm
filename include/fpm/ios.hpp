@@ -117,67 +117,93 @@ namespace fpm
 		const std::locale locale = os.getloc();
 		const auto& ctype = std::use_facet<std::ctype<CharT>>(locale);
 		const auto& numpunct = std::use_facet<std::numpunct<CharT>>(locale);
-
-		// The output: sign, "0x" prefix and the widened digits with the locale's decimal point and grouping
-		std::array<CharT, 512> small_body;
-		std::basic_string<CharT> large_body;
-		std::span<CharT> body(small_body);
-		if(number.size() * 2 + 4 > small_body.size())
-		{
-			large_body.resize(number.size() * 2 + 4);
-			body = std::span<CharT>(large_body);
-		}
-		std::size_t body_length = 0;
-
-		if(!number.empty() && number.front() == '-')
-		{
-			body[body_length++] = ctype.widen('-');
-			number.remove_prefix(1);
-		}
-		else if((flags & std::ios_base::showpos) != 0)
-		{
-			body[body_length++] = ctype.widen('+');
-		}
-		const auto sign_length = body_length;
-		if(hex)
-		{
-			body[body_length++] = ctype.widen('0');
-			body[body_length++] = ctype.widen(uppercase ? 'X' : 'x');
-		}
-		const auto prefix_length = body_length;
-
-		const auto integral_digits = std::min(number.find_first_of(".ep"), number.size());
 		const std::string grouping = numpunct.grouping();
-		const CharT thousands_sep = numpunct.thousands_sep();
-		const CharT decimal_point = numpunct.decimal_point();
 		const bool grouped = !grouping.empty() && static_cast<unsigned char>(grouping[0]) != 0
 			&& static_cast<unsigned char>(grouping[0]) < static_cast<unsigned char>(CHAR_MAX);
-		for(std::size_t i = 0; i < number.size(); ++i)
-		{
-			char c = number[i];
-			if(uppercase && c >= 'a' && c <= 'z')
-				c = static_cast<char>(c - 'a' + 'A');
-			body[body_length++] = (c == '.') ? decimal_point : ctype.widen(c);
+		const CharT decimal_point = numpunct.decimal_point();
+		const bool negative = !number.empty() && number.front() == '-';
 
-			// Insert a separator after this digit if a group ends here (group sizes from the right)
-			if(grouped && i + 1 < integral_digits)
+		// The characters to output, and the lengths of the sign and of the sign plus "0x" at their start
+		const CharT* data = nullptr;
+		std::size_t data_length = 0;
+		std::size_t sign_length = 0;
+		std::size_t prefix_length = 0;
+
+		std::array<CharT, 512> small_body;
+		std::basic_string<CharT> large_body;
+		bool plain = false;
+		if constexpr(std::is_same_v<CharT, char>)
+		{
+			// Common case: the "C" locale's formatting, so the output of `to_chars` is used as it is
+			plain = !grouped && decimal_point == '.' && !uppercase && !hex && (flags & std::ios_base::showpos) == 0
+				&& ctype.widen('0') == '0' && ctype.widen('-') == '-' && ctype.widen('e') == 'e';
+			if(plain) [[likely]]
 			{
-				std::size_t remaining = integral_digits - (i + 1); // digits to the right of the separator
-				std::size_t group = 0;
-				while(true)
+				data = number.data();
+				data_length = number.size();
+				sign_length = negative ? 1 : 0;
+				prefix_length = sign_length;
+			}
+		}
+		if(!plain)
+		{
+			// The output: sign, "0x" prefix and the widened digits with the locale's decimal point and grouping
+			std::span<CharT> body(small_body);
+			if(number.size() * 2 + 4 > small_body.size())
+			{
+				large_body.resize(number.size() * 2 + 4);
+				body = std::span<CharT>(large_body);
+			}
+			std::size_t body_length = 0;
+
+			if(negative)
+			{
+				body[body_length++] = ctype.widen('-');
+				number.remove_prefix(1);
+			}
+			else if((flags & std::ios_base::showpos) != 0)
+			{
+				body[body_length++] = ctype.widen('+');
+			}
+			sign_length = body_length;
+			if(hex)
+			{
+				body[body_length++] = ctype.widen('0');
+				body[body_length++] = ctype.widen(uppercase ? 'X' : 'x');
+			}
+			prefix_length = body_length;
+
+			const auto integral_digits = std::min(number.find_first_of(".ep"), number.size());
+			const CharT thousands_sep = numpunct.thousands_sep();
+			for(std::size_t i = 0; i < number.size(); ++i)
+			{
+				char c = number[i];
+				if(uppercase && c >= 'a' && c <= 'z')
+					c = static_cast<char>(c - 'a' + 'A');
+				body[body_length++] = (c == '.') ? decimal_point : ctype.widen(c);
+
+				// Insert a separator after this digit if a group ends here (group sizes from the right)
+				if(grouped && i + 1 < integral_digits)
 				{
-					const auto size = static_cast<unsigned char>(grouping[std::min(group, grouping.size() - 1)]);
-					if(size == 0 || size >= static_cast<unsigned char>(CHAR_MAX) || remaining < size)
-						break; // no (further) grouping
-					remaining -= size;
-					if(remaining == 0)
+					std::size_t remaining = integral_digits - (i + 1); // digits to the right of the separator
+					std::size_t group = 0;
+					while(true)
 					{
-						body[body_length++] = thousands_sep;
-						break;
+						const auto size = static_cast<unsigned char>(grouping[std::min(group, grouping.size() - 1)]);
+						if(size == 0 || size >= static_cast<unsigned char>(CHAR_MAX) || remaining < size)
+							break; // no (further) grouping
+						remaining -= size;
+						if(remaining == 0)
+						{
+							body[body_length++] = thousands_sep;
+							break;
+						}
+						++group;
 					}
-					++group;
 				}
 			}
+			data = body.data();
+			data_length = body_length;
 		}
 
 		// Output with padding
@@ -198,17 +224,17 @@ namespace fpm
 
 		const auto width = os.width();
 		os.width(0);
-		const auto padding = static_cast<std::size_t>(std::max<std::streamsize>(0, width - static_cast<std::streamsize>(body_length)));
-		if(padding == 0)
+		const auto padding = static_cast<std::size_t>(std::max<std::streamsize>(0, width - static_cast<std::streamsize>(data_length)));
+		if(padding == 0) [[likely]]
 		{
-			put(body.data(), body_length);
+			put(data, data_length);
 		}
 		else
 		{
 			const auto adjust = flags & std::ios_base::adjustfield;
 			if(adjust == std::ios_base::left)
 			{
-				put(body.data(), body_length);
+				put(data, data_length);
 				put_fill(padding);
 			}
 			else if(adjust == std::ios_base::internal)
@@ -216,14 +242,14 @@ namespace fpm
 				// Padding after the sign if there is one (like the standard library does for floating-point types),
 				// otherwise after the "0x" of hexfloats
 				const auto internal = (sign_length > 0) ? sign_length : prefix_length;
-				put(body.data(), internal);
+				put(data, internal);
 				put_fill(padding);
-				put(body.data() + internal, body_length - internal);
+				put(data + internal, data_length - internal);
 			}
 			else
 			{
 				put_fill(padding);
-				put(body.data(), body_length);
+				put(data, data_length);
 			}
 		}
 		if(!ok)

@@ -143,15 +143,7 @@ namespace fpm
 		/// Like static_cast, this truncates bits that don't fit.
 		template<std::floating_point T>
 		inline constexpr explicit fixed(const T val) noexcept
-			: m_value(
-				static_cast<BaseType>((EnableRounding) ?
-				(
-					(val >= 0.0) ?
-					(val * FRACTION_MULT + T{0.5}) :
-					(val * FRACTION_MULT - T{0.5})
-				) :
-				(val * FRACTION_MULT))
-			)
+			: m_value(floating_to_raw(val))
 		{}
 
 		/// Constructs from another fixed-point type with possibly different underlying representation.
@@ -297,9 +289,11 @@ namespace fpm
 			}
 
 			const IntermediateType int_part = static_cast<IntermediateType>(integer_value) * FRACTION_MULT;
-			const IntermediateType frac_part = EnableRounding
-				? two_frac_part / 2 + two_frac_part % 2 // round half away from zero
-				: two_frac_part / 2;                    // truncate towards zero
+			IntermediateType frac_part;
+			if constexpr(EnableRounding)
+				frac_part = two_frac_part / 2 + two_frac_part % 2; // round half away from zero
+			else
+				frac_part = two_frac_part / 2;                     // truncate towards zero
 			return fixed(
 				static_cast<BaseType>(int_part + frac_part),
 				raw_construct_tag{}
@@ -442,6 +436,16 @@ namespace fpm
 			return static_cast<BaseType>(static_cast<U>(static_cast<U>(val) << FractionBits));
 		}
 
+		/// Raw value of a floating-point number: rounded to nearest (ties away from zero), or truncated.
+		template<std::floating_point T>
+		[[nodiscard]] inline static constexpr BaseType floating_to_raw(const T val) noexcept
+		{
+			if constexpr(EnableRounding)
+				return static_cast<BaseType>((val >= T{0}) ? (val * FRACTION_MULT + T{0.5}) : (val * FRACTION_MULT - T{0.5}));
+			else
+				return static_cast<BaseType>(val * FRACTION_MULT);
+		}
+
 		BaseType m_value;
 	};
 
@@ -476,10 +480,14 @@ namespace fpm
 
 #pragma endregion
 
-	template<std::signed_integral B, typename I, uint32_t F, bool R>
+	/// Negation. For unsigned base types the result wraps around, like negating an unsigned integer.
+	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator-(const fixed<B, I, F, R>& x) noexcept
 	{
-		return fixed<B, I, F, R>::from_raw_value(-x.raw_value());
+		if constexpr(std::is_signed_v<B>)
+			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(-x.raw_value()));
+		else
+			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(B{0} - x.raw_value()));
 	}
 
 #pragma region Arithmetic operators
