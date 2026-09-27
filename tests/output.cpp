@@ -336,7 +336,7 @@ protected:
 
 TEST_F(output_specific, type_limit)
 {
-	using F4 = fpm::fixed<std::int8_t, std::int16_t, 4>;
+	using F4 = fpm::fixed<int8_t, int16_t, 4>;
 	using F16 = fpm::fixed_16_16;
 
 	test("-32768.000", F16::from_raw_value(-2147483647 - 1), 3, std::ios::fixed);
@@ -374,7 +374,7 @@ TEST(output_types, matches_double)
 					ss_double.setf(flags, std::ios::floatfield);
 					ss_fixed << std::setprecision(precision) << x;
 					ss_double << std::setprecision(precision) << static_cast<double>(x);
-					ASSERT_EQ(ss_double.str(), ss_fixed.str()) << "raw " << static_cast<long long>(raw);
+					ASSERT_EQ(ss_double.str(), ss_fixed.str()) << "raw " << static_cast<int64_t>(raw);
 				}
 			}
 		}

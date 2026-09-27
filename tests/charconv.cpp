@@ -32,7 +32,7 @@ namespace
 	{
 		std::errc ec;
 		std::size_t consumed;
-		long long raw;
+		int64_t raw;
 	};
 
 	/// Parse with fpm::from_chars; `raw` is the raw value (or the untouched sentinel on error)
@@ -41,7 +41,7 @@ namespace
 	{
 		auto value = P::from_raw_value(42);
 		const auto result = fpm::from_chars(text.data(), text.data() + text.size(), value, fmt);
-		return {result.ec, static_cast<std::size_t>(result.ptr - text.data()), static_cast<long long>(value.raw_value())};
+		return {result.ec, static_cast<std::size_t>(result.ptr - text.data()), static_cast<int64_t>(value.raw_value())};
 	}
 
 	/// Random raw values, restricted to 53 significant bits so that they are exact as a `double`
@@ -78,7 +78,7 @@ namespace
 	/// Exact expected raw value of M * 10^E for a fixed-point type, or `nullopt` if out of range.
 	/// Uses 128-bit arithmetic, so M must be < 10^12 and E in [-25, 6].
 	template<typename P>
-	std::optional<long long> exact_raw(const unsigned long long mantissa, const int exponent10, const bool negative)
+	std::optional<int64_t> exact_raw(const uint64_t mantissa, const int exponent10, const bool negative)
 	{
 		using U = unsigned __int128;
 		using B = typename P::base_type;
@@ -109,8 +109,8 @@ namespace
 			limit = negative ? 0 : U{std::numeric_limits<B>::max()};
 		if(mag > limit)
 			return std::nullopt;
-		const auto m = static_cast<unsigned long long>(mag);
-		return static_cast<long long>(negative ? 0 - m : m);
+		const auto m = static_cast<uint64_t>(mag);
+		return static_cast<int64_t>(negative ? 0 - m : m);
 	}
 #endif
 }
@@ -126,9 +126,9 @@ using CharconvTypes = ::testing::Types<
 	fpm::fixed_16_16,
 	fpm::fixed_24_8,
 	fpm::fixed_8_24,
-	fpm::fixed<std::int32_t, std::int64_t, 31>,        // single (sign) integral bit
-	fpm::fixed<std::int32_t, std::int64_t, 16, false>, // no rounding
-	fpm::fixed<std::uint16_t, std::uint32_t, 8>        // unsigned
+	fpm::fixed<int32_t, int64_t, 31>,        // single (sign) integral bit
+	fpm::fixed<int32_t, int64_t, 16, false>, // no rounding
+	fpm::fixed<uint16_t, uint32_t, 8>        // unsigned
 #ifdef FPM_INT128
 	,
 	fpm::fixed_32_32,
@@ -159,7 +159,7 @@ TYPED_TEST(charconv, to_chars_with_precision_matches_double)
 			for(const auto precision : precisions)
 			{
 				ASSERT_EQ(double_to_chars_string(d, fmt, precision), to_chars_string(value, fmt, precision))
-					<< "raw=" << static_cast<long long>(value.raw_value()) << " fmt=" << static_cast<int>(fmt) << " precision=" << precision;
+					<< "raw=" << static_cast<int64_t>(value.raw_value()) << " fmt=" << static_cast<int>(fmt) << " precision=" << precision;
 			}
 		}
 		// A negative precision means "as if omitted": 6, or exact for hex
@@ -174,7 +174,7 @@ TYPED_TEST(charconv, hex_matches_double)
 	for(const auto value : sample_values<P>(1000))
 	{
 		EXPECT_EQ(double_to_chars_string(static_cast<double>(value), std::chars_format::hex), to_chars_string(value, std::chars_format::hex))
-			<< "raw=" << static_cast<long long>(value.raw_value());
+			<< "raw=" << static_cast<int64_t>(value.raw_value());
 	}
 }
 
@@ -190,7 +190,7 @@ TYPED_TEST(charconv, shortest_round_trips)
 
 	for(const auto value : sample_values<P>(1000))
 	{
-		const auto raw = static_cast<long long>(value.raw_value());
+		const auto raw = static_cast<int64_t>(value.raw_value());
 
 		const auto plain = to_chars_string(value);
 		const auto parsed_plain = parse<P>(plain);
@@ -230,7 +230,7 @@ TYPED_TEST(charconv, shortest_is_minimal)
 			// One digit less must not round-trip
 			const auto shorter = to_chars_string(value, std::chars_format::scientific, significant - 2);
 			const auto result = parse<P>(shorter);
-			EXPECT_TRUE(result.ec != std::errc{} || result.raw != static_cast<long long>(value.raw_value()))
+			EXPECT_TRUE(result.ec != std::errc{} || result.raw != static_cast<int64_t>(value.raw_value()))
 				<< text << " could be written as " << shorter;
 		}
 	}
@@ -245,10 +245,10 @@ TYPED_TEST(charconv, from_chars_is_exact)
 
 	for(int i = 0; i < 5000; ++i)
 	{
-		unsigned long long modulus = 1;
+		uint64_t modulus = 1;
 		for(auto len = 1 + rng() % 12; len > 0; --len)
 			modulus *= 10;
-		const unsigned long long mantissa = rng() % modulus;
+		const uint64_t mantissa = rng() % modulus;
 		const int exponent10 = static_cast<int>(rng() % 32) - 25;
 		const bool negative = std::is_signed_v<B> && rng() % 2;
 
@@ -265,7 +265,7 @@ TYPED_TEST(charconv, from_chars_is_exact)
 		if(expected)
 		{
 			ASSERT_EQ(result.ec, std::errc{}) << text;
-			ASSERT_EQ(result.raw, static_cast<long long>(static_cast<B>(*expected))) << text;
+			ASSERT_EQ(result.raw, static_cast<int64_t>(static_cast<B>(*expected))) << text;
 		}
 		else
 		{
@@ -328,7 +328,7 @@ TEST(charconv, shortest_format_selection)
 	EXPECT_EQ("0p+0", to_chars_string(P(0), std::chars_format::hex));
 
 	// Without rounding, the parser truncates, so the shortest form is rounded away from zero
-	using T = fpm::fixed<std::int32_t, std::int64_t, 16, false>;
+	using T = fpm::fixed<int32_t, int64_t, 16, false>;
 	EXPECT_EQ(6553, T(0.1).raw_value());
 	EXPECT_EQ("0.1", to_chars_string(T(0.1)));
 	EXPECT_EQ("-0.1", to_chars_string(T(-0.1)));
@@ -355,8 +355,8 @@ TEST(charconv, to_chars_buffer_too_small)
 TEST(charconv, from_chars_grammar)
 {
 	using P = fpm::fixed_16_16;
-	constexpr auto raw = [](double v) { return static_cast<long long>(P(v).raw_value()); };
-	const auto expect = [](const parsed& r, std::errc ec, std::size_t consumed, long long value, std::string_view text)
+	constexpr auto raw = [](double v) { return static_cast<int64_t>(P(v).raw_value()); };
+	const auto expect = [](const parsed& r, std::errc ec, std::size_t consumed, int64_t value, std::string_view text)
 	{
 		EXPECT_EQ(r.ec, ec) << text;
 		EXPECT_EQ(r.consumed, consumed) << text;
@@ -365,7 +365,7 @@ TEST(charconv, from_chars_grammar)
 	constexpr auto ok = std::errc{};
 	constexpr auto invalid = std::errc::invalid_argument;
 	constexpr auto range = std::errc::result_out_of_range;
-	constexpr long long untouched = 42;
+	constexpr int64_t untouched = 42;
 
 	// Invalid inputs: `ptr` is `first` and the value is untouched
 	for(const auto text : {"", "-", "+1", " 1", ".", "-.", "e5", "x", "--1", ".e1"})
@@ -434,7 +434,7 @@ TEST(charconv, from_chars_grammar)
 TEST(charconv, from_chars_rounding)
 {
 	using P = fpm::fixed_16_16;
-	using T = fpm::fixed<std::int32_t, std::int64_t, 16, false>;
+	using T = fpm::fixed<int32_t, int64_t, 16, false>;
 
 	// 2^-17 is exactly half an epsilon: ties go to even
 	EXPECT_EQ(0, parse<P>("0.00000762939453125").raw);
@@ -464,7 +464,7 @@ TEST(charconv, from_chars_rounding)
 
 TEST(charconv, unsigned_types)
 {
-	using U = fpm::fixed<std::uint16_t, std::uint32_t, 8>;
+	using U = fpm::fixed<uint16_t, uint32_t, 8>;
 	EXPECT_EQ(std::errc::result_out_of_range, parse<U>("-1").ec);
 	EXPECT_EQ(std::errc{}, parse<U>("-0").ec);
 	EXPECT_EQ(0xFFFF, parse<U>("255.99609375").raw);

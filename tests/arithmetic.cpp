@@ -70,7 +70,7 @@ TYPED_TEST(arithmethic, division)
 
 TEST(arithmethic, division_range)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// These calculation will overflow and produce
 	// wrong results without the intermediate type.
@@ -80,8 +80,8 @@ TEST(arithmethic, division_range)
 TEST(arithmethic, multiplication_rounding)
 {
 	// Using 1 bit of fractional precision to test rounding
-	using Q_round = fpm::fixed<std::int32_t, std::int64_t, 1, true>;
-	using Q = fpm::fixed<std::int32_t, std::int64_t, 1, false>;
+	using Q_round = fpm::fixed<int32_t, int64_t, 1, true>;
+	using Q = fpm::fixed<int32_t, int64_t, 1, false>;
 
 	EXPECT_EQ(Q_round(1.0), Q_round(1.5) * Q_round(0.5));
 	EXPECT_EQ(Q_round(0.5), Q_round(0.5) * Q_round(0.5));
@@ -92,8 +92,8 @@ TEST(arithmethic, multiplication_rounding)
 TEST(arithmethic, division_rounding)
 {
 	// Using 1 bit of fractional precision to test rounding
-	using Q_round = fpm::fixed<std::int32_t, std::int64_t, 1, true>;
-	using Q = fpm::fixed<std::int32_t, std::int64_t, 1, false>;
+	using Q_round = fpm::fixed<int32_t, int64_t, 1, true>;
+	using Q = fpm::fixed<int32_t, int64_t, 1, false>;
 
 	EXPECT_EQ(Q_round(2.5), Q_round(3.5) / Q_round(1.5));
 	EXPECT_EQ(Q_round(0.5), Q_round(1.0) / Q_round(1.5));

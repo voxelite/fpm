@@ -24,7 +24,7 @@ namespace fpm
 		/// Applies the alternate form ('#' in printf and std::format, std::showpoint for streams) to the output of
 		/// `to_chars` for the given `type` ('a', 'e', 'f', 'g', or '\0' for the general format with a precision):
 		/// the decimal point is always shown, and for 'g' trailing zeros are kept to show `precision` significant digits.
-		inline void apply_alternate_form(std::string& text, const char type, const int precision)
+		inline void apply_alternate_form(std::string& text, const char type, const int32_t precision)
 		{
 			const auto exponent_pos = text.find_first_of(type == 'a' ? "p" : "e");
 			const auto mantissa_end = (exponent_pos == std::string::npos) ? text.size() : exponent_pos;
@@ -69,7 +69,7 @@ namespace fpm
 		const auto floatfield = flags & std::ios_base::floatfield;
 		const bool uppercase = (flags & std::ios_base::uppercase) != 0;
 		const bool hex = floatfield == (std::ios_base::fixed | std::ios_base::scientific);
-		const auto precision = static_cast<int>(std::min<std::streamsize>(os.precision() < 0 ? 6 : os.precision(), 1'000'000));
+		const auto precision = static_cast<int32_t>(std::min<std::streamsize>(os.precision() < 0 ? 6 : os.precision(), 1'000'000));
 
 		// The number in the "C" locale: in a stack buffer, unless a large precision needs more
 		std::array<char, 256> small_buffer;
@@ -313,7 +313,7 @@ namespace fpm
 
 		const char infinity[] = "infinity";
 		// Must be "inf" or "infinity"
-		int i = 0;
+		int32_t i = 0;
 		while(i < 8 && std::tolower(static_cast<unsigned char>(ch)) == infinity[i])
 		{
 			++i;
@@ -334,7 +334,7 @@ namespace fpm
 		}
 
 		// Collect the digits and let the exact conversion of `fpm::from_chars` convert them (no allocations)
-		detail::charconv::decimal digits;
+		detail::charconv::decimal_for<B, F> digits;
 		digits.negative = negate;
 
 		char exponent_char = 'e';
@@ -355,8 +355,8 @@ namespace fpm
 				any_digit = true; // a leading zero
 			}
 		}
-		const int base = hex ? 16 : 10;
-		const int digit_scale = hex ? 4 : 1;
+		const int32_t base = hex ? 16 : 10;
+		const int32_t digit_scale = hex ? 4 : 1;
 
 		// Parse the significand
 		thousands_separator_allowed = true;
@@ -375,7 +375,7 @@ namespace fpm
 			}
 			else
 			{
-				const int value = detail::charconv::digit_value(ch, base);
+				const int32_t value = detail::charconv::digit_value(ch, base);
 				if(value < 0)
 					break;
 				detail::charconv::add_digit(digits, value, seen_point, digit_scale);
@@ -402,10 +402,10 @@ namespace fpm
 			}
 
 			bool parsed = false;
-			long long exponent = 0;
+			int32_t exponent = 0;
 			while(ch >= '0' && ch <= '9')
 			{
-				if(exponent < 1'000'000'000) // saturate: huge exponents give 0 or overflow either way
+				if(exponent < detail::charconv::exponent_limit) // saturate: huge exponents give 0 or overflow either way
 					exponent = exponent * 10 + (ch - '0');
 				parsed = true;
 				ch = next();
@@ -416,14 +416,14 @@ namespace fpm
 				is.setstate(std::ios::failbit);
 				return is;
 			}
-			digits.exponent += exponent_negate ? -exponent : exponent;
+			detail::charconv::add_exponent(digits, exponent_negate ? -exponent : exponent);
 		}
 
 		// We've parsed all we need. Construct the value.
 		digits.trim();
 		const auto converted = hex
 			? detail::charconv::from_hex_digits<B, F, R>(digits)
-			: detail::charconv::from_decimal<B, F, R>(digits);
+			: detail::charconv::from_decimal<B, I, F, R>(digits);
 		if(converted.out_of_range)
 		{
 			// Too large: saturate
@@ -664,7 +664,7 @@ namespace std
 		{
 			const std::size_t w = resolve(width, ctx);
 			const bool has_precision = precision.is_set;
-			const int p = has_precision ? static_cast<int>(std::min<std::size_t>(resolve(precision, ctx), 1'000'000)) : -1;
+			const int32_t p = has_precision ? static_cast<int32_t>(std::min<std::size_t>(resolve(precision, ctx), 1'000'000)) : -1;
 
 			// Convert, with room for a sign, a large precision and '#' additions
 			const auto lower = static_cast<char>(type | 0x20);

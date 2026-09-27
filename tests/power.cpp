@@ -4,7 +4,7 @@
 TEST(power, exp)
 {
 	// For several values, verify that fpm::exp is close to std::exp.
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// Maximum relative error (percentage) we allow
 	constexpr auto MAX_ERROR_PERC = 0.02;
@@ -20,7 +20,7 @@ TEST(power, exp)
 TEST(power, exp2)
 {
 	// For several values, verify that fpm::exp2 is close to std::exp2.
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// Maximum relative error (percentage) we allow
 	constexpr auto MAX_ERROR_PERC = 0.01;
@@ -36,7 +36,7 @@ TEST(power, exp2)
 TEST(power, expm1)
 {
 	// For several values, verify that fpm::expm1 is close to std::expm1.
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// Maximum relative error (percentage) we allow
 	constexpr auto MAX_ERROR_PERC = 0.02;
@@ -52,7 +52,7 @@ TEST(power, expm1)
 TEST(power, log)
 {
 	// For several values, verify that fpm::log is close to std::log.
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// Maximum relative error (percentage) we allow
 	constexpr auto MAX_ERROR_PERC = 0.01;
@@ -82,7 +82,7 @@ TEST(power, log)
 TEST(power, log2)
 {
 	// For several values, verify that fpm::log2 is close to std::log2.
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// Maximum relative error (percentage) we allow
 	constexpr auto MAX_ERROR_PERC = 0.01;
@@ -112,7 +112,7 @@ TEST(power, log2)
 TEST(power, log10)
 {
 	// For several values, verify that fpm::log10 is close to std::log10exp.
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// Maximum relative error (percentage) we allow
 	constexpr auto MAX_ERROR_PERC = 0.01;
@@ -142,7 +142,7 @@ TEST(power, log10)
 TEST(power, log1p)
 {
 	// For several values, verify that fpm::log1p is close to std::log1p.
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// Maximum relative error (percentage) we allow
 	constexpr auto MAX_ERROR_PERC = 0.01;
@@ -172,7 +172,7 @@ TEST(power, log1p)
 TEST(power, pow)
 {
 	// For several combinations of x and y, verify that fpm::pow is close to std::pow.
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// Maximum relative error (percentage) we allow
 	constexpr auto MAX_ERROR_PERC = 0.11;

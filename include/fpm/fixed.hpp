@@ -33,7 +33,7 @@ namespace fpm
 #endif
 
 #ifdef FPM_INT128
-	static_assert(sizeof(FPM_INT128) > sizeof(std::int64_t));
+	static_assert(sizeof(FPM_INT128) > sizeof(int64_t));
 	static_assert(std::numeric_limits<FPM_INT128>::is_signed);
 #endif
 
@@ -309,10 +309,10 @@ namespace fpm
 
 #pragma region Constants
 
-		[[nodiscard]] inline static constexpr fixed e()       { return from_fixed_point<61>(6267931151224907085ll); }
-		[[nodiscard]] inline static constexpr fixed pi()      { return from_fixed_point<61>(7244019458077122842ll); }
-		[[nodiscard]] inline static constexpr fixed half_pi() { return from_fixed_point<62>(7244019458077122842ll); }
-		[[nodiscard]] inline static constexpr fixed two_pi()  { return from_fixed_point<60>(7244019458077122842ll); }
+		[[nodiscard]] inline static constexpr fixed e()       { return from_fixed_point<61>(int64_t{6267931151224907085}); }
+		[[nodiscard]] inline static constexpr fixed pi()      { return from_fixed_point<61>(int64_t{7244019458077122842}); }
+		[[nodiscard]] inline static constexpr fixed half_pi() { return from_fixed_point<62>(int64_t{7244019458077122842}); }
+		[[nodiscard]] inline static constexpr fixed two_pi()  { return from_fixed_point<60>(int64_t{7244019458077122842}); }
 
 #pragma endregion
 
@@ -448,29 +448,29 @@ namespace fpm
 #pragma region Convenience typedefs
 
 #pragma region 8-bit Base
-	using fixed_4_4 = fixed<std::int8_t, std::int16_t, 4>;
+	using fixed_4_4 = fixed<int8_t, int16_t, 4>;
 #pragma endregion
 
 #pragma region 16-bit Base
-	using fixed_8_8 = fixed<std::int16_t, std::int32_t, 8>;
+	using fixed_8_8 = fixed<int16_t, int32_t, 8>;
 #pragma endregion
 
 #pragma region 32-bit Base
-	using fixed_8_24  = fixed<std::int32_t, std::int64_t, 24>;
-	using fixed_16_16 = fixed<std::int32_t, std::int64_t, 16>;
-	using fixed_24_8  = fixed<std::int32_t, std::int64_t, 8>;
+	using fixed_8_24  = fixed<int32_t, int64_t, 24>;
+	using fixed_16_16 = fixed<int32_t, int64_t, 16>;
+	using fixed_24_8  = fixed<int32_t, int64_t, 8>;
 #pragma endregion
 
 #pragma region 64-bit Base
 #ifdef FPM_INT128
 
-	using fixed_56_8  = fixed<std::int64_t, FPM_INT128, 8>;
-	using fixed_48_16 = fixed<std::int64_t, FPM_INT128, 16>;
-	using fixed_40_24 = fixed<std::int64_t, FPM_INT128, 24>;
-	using fixed_32_32 = fixed<std::int64_t, FPM_INT128, 32>;
-	using fixed_24_40 = fixed<std::int64_t, FPM_INT128, 40>;
-	using fixed_16_48 = fixed<std::int64_t, FPM_INT128, 48>;
-	using fixed_8_56  = fixed<std::int64_t, FPM_INT128, 56>;
+	using fixed_56_8  = fixed<int64_t, FPM_INT128, 8>;
+	using fixed_48_16 = fixed<int64_t, FPM_INT128, 16>;
+	using fixed_40_24 = fixed<int64_t, FPM_INT128, 24>;
+	using fixed_32_32 = fixed<int64_t, FPM_INT128, 32>;
+	using fixed_24_40 = fixed<int64_t, FPM_INT128, 40>;
+	using fixed_16_48 = fixed<int64_t, FPM_INT128, 48>;
+	using fixed_8_56  = fixed<int64_t, FPM_INT128, 56>;
 #endif
 #pragma endregion
 

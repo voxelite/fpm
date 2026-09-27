@@ -77,7 +77,7 @@ using MathTypes = ::testing::Types<
 	fpm::fixed_16_16,
 	fpm::fixed_24_8,
 	fpm::fixed_8_24,
-	fpm::fixed<std::int32_t, std::int64_t, 16, false>
+	fpm::fixed<int32_t, int64_t, 16, false>
 #ifdef FPM_INT128
 	,
 	fpm::fixed_32_32,

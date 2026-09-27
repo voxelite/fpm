@@ -18,16 +18,10 @@ namespace fpm
 	namespace detail
 	{
 
-		/// Returns the index of the most-signifcant set bit
-		[[nodiscard]] inline static constexpr int32_t find_highest_bit(const uint64_t value) noexcept
-		{
-			assert(value != 0);
-			return static_cast<int32_t>(std::bit_width(value)) - 1L;
-		}
-
-		/// Returns the index of the most-significant set bit of a positive value of up to 128 bits
+		/// Returns the index of the most-significant set bit of a positive value, in the value's own width
+		/// (up to 128 bits)
 		template<typename T>
-		[[nodiscard]] inline constexpr int32_t find_highest_bit_wide(const T value) noexcept
+		[[nodiscard]] inline constexpr int32_t find_highest_bit(const T value) noexcept
 		{
 			assert(value > 0);
 			if constexpr(sizeof(T) > sizeof(uint64_t))
@@ -35,8 +29,12 @@ namespace fpm
 				const auto high = static_cast<uint64_t>(value >> 64);
 				if(high != 0)
 					return 64 + find_highest_bit(high);
+				return find_highest_bit(static_cast<uint64_t>(value));
 			}
-			return find_highest_bit(static_cast<uint64_t>(value));
+			else
+			{
+				return static_cast<int32_t>(std::bit_width(static_cast<std::make_unsigned_t<T>>(value))) - 1;
+			}
 		}
 
 		/// Integer square root of a non-negative value, rounded to nearest
@@ -47,7 +45,7 @@ namespace fpm
 			if(num == 0)
 				return 0;
 			T res = 0;
-			for(T bit = T{1} << (find_highest_bit_wide(num) / 2 * 2); bit != 0; bit >>= 2)
+			for(T bit = T{1} << (find_highest_bit(num) / 2 * 2); bit != 0; bit >>= 2)
 			{
 				const T val = res + bit;
 				res >>= 1;
@@ -110,20 +108,20 @@ namespace fpm
 		/// Fraction bits for constants in precise calculations: as many as the intermediate type allows
 		/// when multiplied with a raw value of the base type (at most 63).
 		template<typename B, typename I>
-		inline constexpr int constant_precision = std::min<int>(63, static_cast<int>(sizeof(I) - sizeof(B)) * 8 - 1);
+		inline constexpr int32_t constant_precision = std::min<int32_t>(63, static_cast<int32_t>(sizeof(I) - sizeof(B)) * 8 - 1);
 
 		/// A Q63 constant, rounded to `constant_precision<B, I>` fraction bits
-		template<typename B, typename I, long long ConstantQ63>
+		template<typename B, typename I, int64_t ConstantQ63>
 		inline constexpr I precise_constant = static_cast<I>(
 			(constant_precision<B, I> == 63) ? ConstantQ63 : ((ConstantQ63 >> (62 - constant_precision<B, I>)) + 1) >> 1
 		);
 
 		/// x * c for a constant 0 <= c < 1 given in Q63, with a single rounding
 		/// (instead of rounding the constant to the precision of the type first)
-		template<long long ConstantQ63, typename B, typename I, uint32_t F, bool R>
+		template<int64_t ConstantQ63, typename B, typename I, uint32_t F, bool R>
 		[[nodiscard]] inline constexpr fixed<B, I, F, R> multiply_by_constant(const fixed<B, I, F, R> x) noexcept
 		{
-			constexpr int P = constant_precision<B, I>;
+			constexpr int32_t P = constant_precision<B, I>;
 			const I product = static_cast<I>(x.raw_value()) * precise_constant<B, I, ConstantQ63>;
 			if constexpr(R)
 				return fixed<B, I, F, R>::from_raw_value(static_cast<B>((product + (I{1} << (P - 1))) >> P));
@@ -136,18 +134,18 @@ namespace fpm
 		/// Products are calculated in the intermediate type I, so this costs no more than regular fixed-point products.
 		/// (Never fewer than F: for types with fewer integral bits than the polynomial needs, the results are only
 		/// meaningful where the intermediate values happen to fit, just as when evaluating in the type itself.)
-		template<typename B, int IntegralBits, uint32_t F>
-		inline constexpr int poly_bits = std::max(std::numeric_limits<std::make_signed_t<B>>::digits - IntegralBits, static_cast<int>(F));
+		template<typename B, int32_t IntegralBits, uint32_t F>
+		inline constexpr int32_t poly_bits = std::max(std::numeric_limits<std::make_signed_t<B>>::digits - IntegralBits, static_cast<int32_t>(F));
 
 		/// Constant `value` in Q`q` (q >= M), rounded to QM
-		template<typename B, int M>
-		[[nodiscard]] inline constexpr std::make_signed_t<B> poly_coefficient(const long long value, const int q) noexcept
+		template<typename B, int32_t M>
+		[[nodiscard]] inline constexpr std::make_signed_t<B> poly_coefficient(const int64_t value, const int32_t q) noexcept
 		{
 			return static_cast<std::make_signed_t<B>>(q == M ? value : ((value >> (q - M - 1)) + 1) >> 1);
 		}
 
 		/// a * b in QM. Truncates: the few extra bits make rounding the intermediate steps unnecessary.
-		template<typename I, int M, typename S>
+		template<typename I, int32_t M, typename S>
 		[[nodiscard]] inline constexpr S poly_multiply(const S a, const S b) noexcept
 		{
 			return static_cast<S>((static_cast<I>(a) * b) >> M);
@@ -514,8 +512,8 @@ namespace fpm
 		constexpr auto max = std::numeric_limits<Fixed>::max();
 
 		// e^x > 2^integral_bits > max  <=>  x > integral_bits * ln(2)
-		constexpr int integral_bits = std::numeric_limits<B>::digits - static_cast<int>(F);
-		constexpr auto ln2 = Fixed::template from_fixed_point<63>(6393154322601327830ll); // 0.69314718055994530942
+		constexpr int32_t integral_bits = std::numeric_limits<B>::digits - static_cast<int32_t>(F);
+		constexpr auto ln2 = Fixed::template from_fixed_point<63>(int64_t{6393154322601327830}); // 0.69314718055994530942
 		constexpr auto overflow_threshold = ln2 * integral_bits;
 		if(x >= overflow_threshold)
 			return max;
@@ -533,23 +531,23 @@ namespace fpm
 
 		// e^f in [1, e), with M fraction bits
 		using S = std::make_signed_t<B>;
-		constexpr int M = detail::poly_bits<B, 2, F>;
+		constexpr int32_t M = detail::poly_bits<B, 2, F>;
 		constexpr auto multiply = detail::poly_multiply<I, M, S>;
 		constexpr auto coefficient = detail::poly_coefficient<B, M>;
-		constexpr S fA = coefficient( 128239257017632854ll, 63); // 1.3903728105644451e-2
-		constexpr S fB = coefficient( 320978614890280666ll, 63); // 3.4800571158543038e-2
-		constexpr S fC = coefficient(1571680799599592947ll, 63); // 1.7040197373796334e-1
-		constexpr S fD = coefficient(4603349000587966862ll, 63); // 4.9909609871464493e-1
-		constexpr S fE = coefficient(4612052447974689712ll, 62); // 1.0000794567422495
-		constexpr S fF = coefficient(9223361618412247875ll, 63); // 9.9999887043019773e-1
-		const auto fm = static_cast<S>(static_cast<S>(f.raw_value()) << (M - static_cast<int>(F)));
+		constexpr S fA = coefficient( int64_t{128239257017632854}, 63); // 1.3903728105644451e-2
+		constexpr S fB = coefficient( int64_t{320978614890280666}, 63); // 3.4800571158543038e-2
+		constexpr S fC = coefficient(int64_t{1571680799599592947}, 63); // 1.7040197373796334e-1
+		constexpr S fD = coefficient(int64_t{4603349000587966862}, 63); // 4.9909609871464493e-1
+		constexpr S fE = coefficient(int64_t{4612052447974689712}, 62); // 1.0000794567422495
+		constexpr S fF = coefficient(int64_t{9223361618412247875}, 63); // 9.9999887043019773e-1
+		const auto fm = static_cast<S>(static_cast<S>(f.raw_value()) << (M - static_cast<int32_t>(F)));
 		// Estrin's scheme: shorter dependency chains than Horner's
 		const S f2 = multiply(fm, fm);
 		const S f4 = multiply(f2, f2);
 		const S exp_f = multiply(multiply(fA, fm) + fB, f4) + multiply(multiply(fC, fm) + fD, f2) + (multiply(fE, fm) + fF);
 
 		// e^n: for n < 0 (tiny results) as (1/e)^-n, whose powers shrink so they cannot overflow
-		constexpr auto inv_e = Fixed::template from_fixed_point<63>(3393088950634442637ll); // 0.36787944117144232160
+		constexpr auto inv_e = Fixed::template from_fixed_point<63>(int64_t{3393088950634442637}); // 0.36787944117144232160
 		const Fixed exp_n = (n >= 0) ? pow(Fixed::e(), n) : pow(inv_e, -n);
 
 		// e^n * e^f, saturating in case the approximation error pushes the result just past the maximum
@@ -569,21 +567,21 @@ namespace fpm
 		assert(f >= Fixed(0) && f < Fixed(1));
 
 		// 2^n * 2^f is a shift of 2^f
-		if(n >= 0 && n > std::numeric_limits<B>::digits - static_cast<int>(F) - 1)
+		if(n >= 0 && n > std::numeric_limits<B>::digits - static_cast<int32_t>(F) - 1)
 			return std::numeric_limits<Fixed>::max(); // 2^f >= 1 would be shifted out of range
 
 		// 2^f in [1, 2), with M fraction bits
 		using S = std::make_signed_t<B>;
-		constexpr int M = detail::poly_bits<B, 1, F>;
+		constexpr int32_t M = detail::poly_bits<B, 1, F>;
 		constexpr auto multiply = detail::poly_multiply<I, M, S>;
 		constexpr auto coefficient = detail::poly_coefficient<B, M>;
-		constexpr S fA = coefficient(  17491766697771214ll, 63); // 1.8964611454333148e-3
-		constexpr S fB = coefficient(  82483038782406547ll, 63); // 8.9428289841091295e-3
-		constexpr S fC = coefficient( 515275173969157690ll, 63); // 5.5866246304520701e-2
-		constexpr S fD = coefficient(2214897896212987987ll, 63); // 2.4013971109076949e-1
-		constexpr S fE = coefficient(6393224161192452326ll, 63); // 6.9315475247516736e-1
-		constexpr S fF = coefficient(9223371050976163566ll, 63); // 9.9999989311082668e-1
-		const auto fm = static_cast<S>(static_cast<S>(f.raw_value()) << (M - static_cast<int>(F)));
+		constexpr S fA = coefficient(  int64_t{17491766697771214}, 63); // 1.8964611454333148e-3
+		constexpr S fB = coefficient(  int64_t{82483038782406547}, 63); // 8.9428289841091295e-3
+		constexpr S fC = coefficient( int64_t{515275173969157690}, 63); // 5.5866246304520701e-2
+		constexpr S fD = coefficient(int64_t{2214897896212987987}, 63); // 2.4013971109076949e-1
+		constexpr S fE = coefficient(int64_t{6393224161192452326}, 63); // 6.9315475247516736e-1
+		constexpr S fF = coefficient(int64_t{9223371050976163566}, 63); // 9.9999989311082668e-1
+		const auto fm = static_cast<S>(static_cast<S>(f.raw_value()) << (M - static_cast<int32_t>(F)));
 		// Estrin's scheme: shorter dependency chains than Horner's
 		const S f2 = multiply(fm, fm);
 		const S f4 = multiply(f2, f2);
@@ -591,14 +589,15 @@ namespace fpm
 
 		// Result in QF: exp2_f * 2^n / 2^(M-F), rounded to nearest. exp2_f is positive and below 2^(M+1),
 		// so this is done in the unsigned type of the base's width (no wider arithmetic needed).
+		// n is below the range checked above, and results below 2^-(F+1) round to zero, so the shift fits in 32 bits.
+		if(n < -static_cast<B>(F) - 1)
+			return Fixed(0);
 		using U = std::make_unsigned_t<B>;
 		const auto mantissa = static_cast<U>(exp2_f);
-		const long long shift = M - static_cast<long long>(F) - n;
+		const int32_t shift = M - static_cast<int32_t>(F) - static_cast<int32_t>(n);
 		if(shift <= 0)
-			return Fixed::from_raw_value(static_cast<B>(static_cast<U>(mantissa << -shift))); // range checked above
-		if(shift > M + 1)
-			return Fixed(0);
-		return Fixed::from_raw_value(static_cast<B>(static_cast<U>((mantissa >> (shift - 1)) + 1) >> 1));
+			return Fixed::from_raw_value(static_cast<B>(static_cast<U>(mantissa << -shift)));
+		return Fixed::from_raw_value(static_cast<B>(static_cast<U>(static_cast<U>(mantissa >> (shift - 1)) + 1u) >> 1));
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -616,15 +615,17 @@ namespace fpm
 		// The polynomial is evaluated with M fraction bits (see detail::poly_bits). Its argument t = x - 1 is in [0, 1),
 		// and all intermediate values are below 2, so it needs just one integral bit.
 		using S = std::make_signed_t<B>;
-		constexpr int M = detail::poly_bits<B, 1, F>;
+		constexpr int32_t M = detail::poly_bits<B, 1, F>;
 		constexpr auto multiply = detail::poly_multiply<I, M, S>;
 		constexpr auto coefficient = detail::poly_coefficient<B, M>;
 
-		// Normalize input to the [1:2) domain, in QM: move the highest bit to bit 63, then down to bit M (M <= 62)
-		const auto value = static_cast<std::uint64_t>(x.raw_value());
-		const int leading_zeros = std::countl_zero(value);
-		const int32_t highest = 63 - leading_zeros;
-		const auto mantissa = static_cast<S>((value << leading_zeros) >> (63 - M));
+		// Normalize input to the [1:2) domain, in QM: move the highest bit to the top, then down to bit M
+		using U = std::make_unsigned_t<B>;
+		constexpr int32_t top = std::numeric_limits<U>::digits - 1;
+		const auto value = static_cast<U>(x.raw_value());
+		const int32_t leading_zeros = std::countl_zero(value);
+		const int32_t highest = top - leading_zeros;
+		const auto mantissa = static_cast<S>(static_cast<U>(static_cast<U>(value << leading_zeros) >> (top - M)));
 		assert(mantissa >= (S{1} << M) && mantissa - (S{1} << M) < (S{1} << M));
 		const auto t = static_cast<S>(mantissa - (S{1} << M));
 
@@ -632,18 +633,18 @@ namespace fpm
 		// Mathematically identical to the original polynomial in x = 1 + t:
 		//   4.4873610194131727e-2 x^5 - 4.1656368651734915e-1 x^4 + 1.6311487636297217 x^3
 		//   - 3.5507929249026341 x^2 + 5.0917108110420042 x - 2.8003640347009253
-		constexpr S c0 = coefficient(     57824754770287ll, 62); //  1.253874494907734e-05
-		constexpr S c1 = coefficient( 6648596514624850418ll, 62); //  1.441684557027163
-		constexpr S c2 = coefficient(-3265039810578835332ll, 62); // -0.70799265117624666
-		constexpr S c3 = coefficient( 1907532238906173757ll, 62); //  0.41363011950164236
-		constexpr S c4 = coefficient( -886345925253438523ll, 62); // -0.1921956355466905
-		constexpr S c5 = coefficient(  206943000728637990ll, 62); //  0.044873610194131726
+		constexpr S c0 = coefficient(     int64_t{57824754770287}, 62); //  1.253874494907734e-05
+		constexpr S c1 = coefficient( int64_t{6648596514624850418}, 62); //  1.441684557027163
+		constexpr S c2 = coefficient(-int64_t{3265039810578835332}, 62); // -0.70799265117624666
+		constexpr S c3 = coefficient( int64_t{1907532238906173757}, 62); //  0.41363011950164236
+		constexpr S c4 = coefficient( -int64_t{886345925253438523}, 62); // -0.1921956355466905
+		constexpr S c5 = coefficient(  int64_t{206943000728637990}, 62); //  0.044873610194131726
 		const S t2 = multiply(t, t);
 		const S t4 = multiply(t2, t2);
 		const S fraction = multiply(multiply(c5, t) + c4, t4) + multiply(multiply(c3, t) + c2, t2) + (multiply(c1, t) + c0);
 
 		// Integral part plus the fraction, rounded from QM to QF
-		constexpr int shift = M - static_cast<int>(F);
+		constexpr int32_t shift = M - static_cast<int32_t>(F);
 		const I fraction_f = (shift == 0) ? I{fraction} : ((static_cast<I>(fraction) + (I{1} << (shift > 0 ? shift - 1 : 0))) >> shift);
 		return Fixed::from_raw_value(static_cast<B>((static_cast<I>(highest - static_cast<int32_t>(F)) << F) + fraction_f));
 	}
@@ -652,14 +653,14 @@ namespace fpm
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> log(fixed<B, I, F, R> x) noexcept
 	{
 		// ln(x) = log2(x) * ln(2)
-		return detail::multiply_by_constant<6393154322601327830ll>(log2(x)); // ln(2) = 0.69314718055994530942
+		return detail::multiply_by_constant<int64_t{6393154322601327830}>(log2(x)); // ln(2) = 0.69314718055994530942
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> log10(fixed<B, I, F, R> x) noexcept
 	{
 		// log10(x) = log2(x) * log10(2)
-		return detail::multiply_by_constant<2776511644261678566ll>(log2(x)); // log10(2) = 0.30102999566398119521
+		return detail::multiply_by_constant<int64_t{2776511644261678566}>(log2(x)); // log10(2) = 0.30102999566398119521
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -684,33 +685,34 @@ namespace fpm
 		// so that N itself never has to be stored. With root y and remainder r = N' - y^3 of the bits consumed
 		// so far, r <= 3y^2 + 3y, which needs about 2 * (bits of the result) + 2 bits.
 		// With a root below 2^R, (remainder << 3) < 2^(2R+5) is the largest value.
-		constexpr int total_bits_max = std::numeric_limits<B>::digits + 2 * static_cast<int>(F);
-		constexpr int result_bits = (total_bits_max + 2) / 3;
-		[[maybe_unused]] constexpr bool fits_64 = 2 * result_bits + 5 <= 63;
-#ifdef FPM_INT128
-		using W = std::conditional_t<fits_64, std::int64_t, FPM_INT128>;
-#else
-		using W = std::int64_t;
-#endif
+		// Calculated in the intermediate type W = I; the first steps in the base's width (see below).
+		using W = I;
+		constexpr int32_t total_bits_max = std::numeric_limits<B>::digits + 2 * static_cast<int32_t>(F);
+		constexpr int32_t result_bits = (total_bits_max + 2) / 3;
 		// If the root would have too many bits even for W, skip some of the trailing zero groups of N,
-		// computing cbrt(N / 8^skip) * 2^skip instead: this loses `skip` bits (only for extreme types).
-		constexpr int skip = std::max(0, (2 * result_bits + 5 - (static_cast<int>(sizeof(W)) * 8 - 1) + 1) / 2);
+		// computing cbrt(N / 8^skip) * 2^skip instead: this loses `skip` bits (only for types with very few integral bits).
+		constexpr int32_t skip = std::max<int32_t>(0, (2 * result_bits + 5 - std::numeric_limits<W>::digits + 1) / 2);
 
 		// N = X * 2^(2F) = (X << a) * 8^z with a = 2F mod 3: first the 3-bit groups of X << a, then z zero groups
-		constexpr int a = (2 * static_cast<int>(F)) % 3;
-		constexpr int zero_groups = (2 * static_cast<int>(F)) / 3 - skip;
+		constexpr int32_t a = (2 * static_cast<int32_t>(F)) % 3;
+		constexpr int32_t zero_groups = (2 * static_cast<int32_t>(F)) / 3 - skip;
 		static_assert(zero_groups >= 0);
-		const W shifted = static_cast<W>(x.raw_value()) << a;
-		W root = 0;
-		W root_squared = 0;
-		W remainder = 0;
-		const auto step = [&](const W bits)
+		const W shifted = static_cast<W>(static_cast<W>(x.raw_value()) << a);
+		const int32_t data_groups = detail::find_highest_bit(shifted) / 3 + 1;
+		const int32_t total_groups = data_groups + zero_groups;
+		const auto bits_of = [&](const int32_t k) -> W // k-th 3-bit group of N from the top
 		{
-			remainder = (remainder << 3) | bits;
+			return k < data_groups ? static_cast<W>((shifted >> (3 * (data_groups - 1 - k))) & 7) : W{0};
+		};
+
+		// One step: root = 2 * root (+ 1), with remainder = N' - root^3 of the bits consumed so far
+		const auto step = [](auto& root, auto& root_squared, auto& remainder, const auto bits)
+		{
+			remainder = static_cast<std::remove_reference_t<decltype(remainder)>>((remainder << 3) | bits);
 			root <<= 1;
 			root_squared <<= 2;
 			// (root + 1)^3 - root^3
-			const W next = 3 * (root_squared + root) + 1;
+			const auto next = 3 * (root_squared + root) + 1;
 			if(remainder >= next)
 			{
 				remainder -= next;
@@ -718,38 +720,32 @@ namespace fpm
 				++root;
 			}
 		};
-		const int data_groups = detail::find_highest_bit_wide(shifted) / 3 + 1;
-		const int total_groups = data_groups + zero_groups;
-		int k = 0;
-		if constexpr(sizeof(W) > sizeof(std::int64_t))
+
+		W root = 0;
+		W root_squared = 0;
+		W remainder = 0;
+		int32_t k = 0;
+
+		// If the intermediate type is wider than the CPU's registers (e.g. 64-bit on 32-bit CPUs, 128-bit on 64-bit CPUs),
+		// its arithmetic is emulated: then the first steps are done in the signed type of the base's width.
+		// After k steps root < 2^k and remainder < 2^(2k+2), so they fit while (remainder << 3) does.
+		using E = std::make_signed_t<B>;
+		constexpr int32_t early_steps = (std::numeric_limits<E>::digits - 5) / 2;
+		if constexpr(sizeof(W) > sizeof(std::uintptr_t) && sizeof(E) <= sizeof(std::uintptr_t) && early_steps >= 4)
 		{
-			// After k steps root < 2^k and remainder < 2^(2k+2), so the first 28 steps fit in 64-bit arithmetic,
-			// which is considerably faster than the wide type.
-			std::int64_t root64 = 0;
-			std::int64_t root_squared64 = 0;
-			std::int64_t remainder64 = 0;
-			for(; k < total_groups && k < 28; ++k)
-			{
-				const W bits = k < data_groups ? (shifted >> (3 * (data_groups - 1 - k))) & 7 : 0;
-				remainder64 = (remainder64 << 3) | static_cast<std::int64_t>(bits);
-				root64 <<= 1;
-				root_squared64 <<= 2;
-				const std::int64_t next = 3 * (root_squared64 + root64) + 1;
-				if(remainder64 >= next)
-				{
-					remainder64 -= next;
-					root_squared64 += 2 * root64 + 1;
-					++root64;
-				}
-			}
-			root = root64;
-			root_squared = root_squared64;
-			remainder = remainder64;
+			E early_root = 0;
+			E early_root_squared = 0;
+			E early_remainder = 0;
+			for(; k < total_groups && k < early_steps; ++k)
+				step(early_root, early_root_squared, early_remainder, static_cast<E>(bits_of(k)));
+			root = early_root;
+			root_squared = early_root_squared;
+			remainder = early_remainder;
 		}
 		for(; k < data_groups; ++k)
-			step((shifted >> (3 * (data_groups - 1 - k))) & 7);
+			step(root, root_squared, remainder, static_cast<W>((shifted >> (3 * (data_groups - 1 - k))) & 7));
 		for(; k < total_groups; ++k)
-			step(0);
+			step(root, root_squared, remainder, W{0});
 
 		// Round to nearest: N >= (root + 1/2)^3  <=>  8 * remainder > 12 root^2 + 6 root + 1 (never equal)
 		if(8 * remainder > 12 * root_squared + 6 * root + 1)
@@ -832,8 +828,8 @@ namespace fpm
 		template<typename B, typename I, uint32_t F, bool R>
 		[[nodiscard]] inline constexpr I quarter_turns(const fixed<B, I, F, R> x) noexcept
 		{
-			constexpr int P = constant_precision<B, I>;
-			constexpr I two_over_pi = precise_constant<B, I, 5871781006564002453ll>; // 2/π = 0.63661977236758134308
+			constexpr int32_t P = constant_precision<B, I>;
+			constexpr I two_over_pi = precise_constant<B, I, int64_t{5871781006564002453}>; // 2/π = 0.63661977236758134308
 			const I turns = (static_cast<I>(x.raw_value()) * two_over_pi + (I{1} << (P - 1))) >> P;
 			return turns & ((I{4} << F) - 1);
 		}
@@ -908,9 +904,9 @@ namespace fpm
 			using Fixed = fixed<B, I, F, R>;
 			assert(x >= Fixed(0) && x <= Fixed(1));
 
-			constexpr auto fA = Fixed::template from_fixed_point<63>(  716203666280654660ll); //  0.0776509570923569
-			constexpr auto fB = Fixed::template from_fixed_point<63>(-2651115102768076601ll); // -0.287434475393028
-			constexpr auto fC = Fixed::template from_fixed_point<63>( 9178930894564541004ll); //  0.995181681698119  (PI/4 - A - B)
+			constexpr auto fA = Fixed::template from_fixed_point<63>(  int64_t{716203666280654660}); //  0.0776509570923569
+			constexpr auto fB = Fixed::template from_fixed_point<63>(-int64_t{2651115102768076601}); // -0.287434475393028
+			constexpr auto fC = Fixed::template from_fixed_point<63>( int64_t{9178930894564541004}); //  0.995181681698119  (PI/4 - A - B)
 
 			const auto xx = x * x;
 			return ((fA*xx + fB)*xx + fC)*x;

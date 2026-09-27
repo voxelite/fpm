@@ -3,7 +3,7 @@
 
 TEST(trigonometry, sin)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 16>;
+	using P = fpm::fixed<int32_t, int64_t, 16>;
 	const double PI = std::acos(-1);
 
 	constexpr auto MAX_ERROR_PERC = 0.002;
@@ -19,7 +19,7 @@ TEST(trigonometry, sin)
 
 TEST(trigonometry, cos)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 16>;
+	using P = fpm::fixed<int32_t, int64_t, 16>;
 	const double PI = std::acos(-1);
 
 	constexpr auto MAX_ERROR_PERC = 0.002;
@@ -50,7 +50,7 @@ TEST(trigonometry, cos)
 
 TEST(trigonometry, tan)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 16>;
+	using P = fpm::fixed<int32_t, int64_t, 16>;
 	const double PI = std::acos(-1);
 
 	constexpr auto MAX_ERROR_PERC = 0.002;
@@ -90,7 +90,7 @@ TEST(trigonometry, tan)
 
 TEST(trigonometry, atan)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	constexpr auto MAX_ERROR_PERC = 0.025;
 
@@ -113,7 +113,7 @@ TEST(trigonometry, atan)
 
 TEST(trigonometry, asin)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	constexpr auto MAX_ERROR_PERC = 0.025;
 
@@ -128,7 +128,7 @@ TEST(trigonometry, asin)
 
 TEST(trigonometry, acos)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	constexpr auto MAX_ERROR_PERC = 0.025;
 
@@ -143,7 +143,7 @@ TEST(trigonometry, acos)
 
 TEST(trigonometry, atan2)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 	const double PI = std::acos(-1);
 
 	constexpr auto MAX_ERROR_PERC = 0.025;

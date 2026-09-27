@@ -62,7 +62,7 @@ TYPED_TEST(arithmethic_int, division)
 
 TEST(arithmethic_int, division_range)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 12>;
+	using P = fpm::fixed<int32_t, int64_t, 12>;
 
 	// These calculation will overflow and produce
 	// wrong results without the intermediate type.

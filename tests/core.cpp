@@ -53,7 +53,7 @@ using CoreTypes = ::testing::Types<
 	fpm::fixed_16_16,
 	fpm::fixed_24_8,
 	fpm::fixed_8_24,
-	fpm::fixed<std::int32_t, std::int64_t, 16, false>
+	fpm::fixed<int32_t, int64_t, 16, false>
 #ifdef FPM_INT128
 	,
 	fpm::fixed_32_32,
@@ -80,7 +80,7 @@ TYPED_TEST(core, multiplication_is_exactly_rounded)
 			continue;
 		const auto x = P::from_raw_value(xs[i]);
 		const auto y = P::from_raw_value(xs[i + 1]);
-		ASSERT_EQ(static_cast<long long>(expected), static_cast<long long>((x * y).raw_value())) << xs[i] << " * " << xs[i + 1];
+		ASSERT_EQ(static_cast<int64_t>(expected), static_cast<int64_t>((x * y).raw_value())) << xs[i] << " * " << xs[i + 1];
 		auto z = x;
 		z *= y;
 		ASSERT_EQ(x * y, z);
@@ -103,7 +103,7 @@ TYPED_TEST(core, division_is_exactly_rounded)
 			continue;
 		const auto x = P::from_raw_value(xs[i]);
 		const auto y = P::from_raw_value(xs[i + 1]);
-		ASSERT_EQ(static_cast<long long>(expected), static_cast<long long>((x / y).raw_value())) << xs[i] << " / " << xs[i + 1];
+		ASSERT_EQ(static_cast<int64_t>(expected), static_cast<int64_t>((x / y).raw_value())) << xs[i] << " / " << xs[i + 1];
 		auto z = x;
 		z /= y;
 		ASSERT_EQ(x / y, z);
@@ -146,9 +146,9 @@ TYPED_TEST(core, integer_conversion_truncates)
 	using B = raw_t<P>;
 	using U = std::make_unsigned_t<B>;
 	constexpr auto F = P::fraction_bits;
-	for(const long long v : {1ll << 40, -(1ll << 40) - 7, 1234567890123ll, -1ll})
+	for(const int64_t v : {int64_t{1} << 40, -(int64_t{1} << 40) - 7, int64_t{1234567890123}, int64_t{-1}})
 	{
-		const auto expected = static_cast<B>(static_cast<U>(static_cast<unsigned long long>(v) << F));
+		const auto expected = static_cast<B>(static_cast<U>(static_cast<uint64_t>(v) << F));
 		EXPECT_EQ(expected, P(v).raw_value()) << v;
 	}
 }
@@ -248,7 +248,7 @@ TEST(core, from_fixed_point)
 	EXPECT_EQ(fpm::fixed_32_32(5), fpm::fixed_32_32::from_fixed_point<0>(5));
 	EXPECT_EQ(fpm::fixed_32_32(-5), fpm::fixed_32_32::from_fixed_point<0>(-5));
 	EXPECT_EQ(fpm::fixed_8_56(1.5), fpm::fixed_8_56::from_fixed_point<1>(3));
-	EXPECT_EQ(fpm::fixed_16_48(0.75), fpm::fixed_16_48::from_fixed_point<2>(3ll));
+	EXPECT_EQ(fpm::fixed_16_48(0.75), fpm::fixed_16_48::from_fixed_point<2>(int64_t{3}));
 #endif
 	EXPECT_EQ(fpm::fixed_8_24(1.5), fpm::fixed_8_24::from_fixed_point<1>(3));
 	static_assert(fpm::fixed_16_16::from_fixed_point<0>(7) == fpm::fixed_16_16(7));
@@ -264,11 +264,11 @@ TEST(core, from_custom_fraction)
 	EXPECT_EQ(P(3.141592), P::from_custom_fraction<1000000>(3, 141592));
 	EXPECT_EQ(P(-3.141592), P::from_custom_fraction<1000000>(-3, -141592));
 
-	using T = fpm::fixed<std::int32_t, std::int64_t, 16, false>;
+	using T = fpm::fixed<int32_t, int64_t, 16, false>;
 	EXPECT_EQ(6553, T::from_custom_fraction<10>(0, 1).raw_value());
 
 	// Denominators beyond the intermediate type's range for the fraction
-	EXPECT_EQ(fpm::fixed_8_24(0.5), fpm::fixed_8_24::from_custom_fraction<1'000'000'000'000ull>(0ll, 500'000'000'000ll));
+	EXPECT_EQ(fpm::fixed_8_24(0.5), fpm::fixed_8_24::from_custom_fraction<1'000'000'000'000>(int64_t{0}, int64_t{500'000'000'000}));
 
 #ifdef FPM_INT128
 	// Integer parts that need more than 32 bits once shifted

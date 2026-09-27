@@ -44,7 +44,7 @@ TEST(conversion, floats)
 TEST(conversion, float_rounding)
 {
 	// Small number of fraction bits to test rounding
-	using Q = fpm::fixed<std::int32_t, std::int64_t, 2>;
+	using Q = fpm::fixed<int32_t, int64_t, 2>;
 
 	EXPECT_EQ(1.25, static_cast<double>(Q{1.125}));
 	EXPECT_EQ(1.5, static_cast<double>(Q{1.375}));
@@ -55,7 +55,7 @@ TEST(conversion, float_rounding)
 TEST(conversion, float_no_rounding)
 {
 	// Small number of fraction bits to test no rounding
-	using Q = fpm::fixed<std::int32_t, std::int64_t, 2, false>;
+	using Q = fpm::fixed<int32_t, int64_t, 2, false>;
 
 	EXPECT_EQ(1.0, static_cast<double>(Q{1.125}));
 	EXPECT_EQ(1.25, static_cast<double>(Q{1.375}));
@@ -91,7 +91,7 @@ TEST(conversion, fixed_point)
 
 TEST(conversion, fixed_point_no_rounding)
 {
-	using P = fpm::fixed<std::int32_t, std::int64_t, 16, false>;
+	using P = fpm::fixed<int32_t, int64_t, 16, false>;
 	constexpr P epsilon = std::numeric_limits<P>::epsilon();
 
 	EXPECT_EQ(P(-1), P::from_fixed_point<0>(-1));
@@ -128,7 +128,7 @@ TEST(conversion, fixed_to_fixed)
 	}
 
 	// Conversion to a smaller base type should truncate the upper bits
-	using S1 = fpm::fixed<std::int8_t, std::int16_t, 1>;
+	using S1 = fpm::fixed<int8_t, int16_t, 1>;
 	EXPECT_EQ(0x56, S1(P::from_raw_value(0x79'AB'10'00)).raw_value());
 	EXPECT_EQ(-0x56, S1(P::from_raw_value(-0x79'AB'10'00)).raw_value());
 }
