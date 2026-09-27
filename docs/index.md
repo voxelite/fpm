@@ -4,7 +4,7 @@ layout: default
 # fpm
 A C++ header-only fixed-point math library. "fpm" stands for "fixed-point math".
 
-It is designed to serve as a drop-in replacement for floating-point types and aims to provide as much of the standard library's functionality as possible with exclusively integers. `fpm` requires C++11 or higher.
+It is designed to serve as a drop-in replacement for floating-point types and aims to provide as much of the standard library's functionality as possible with exclusively integers. `fpm` requires C++26.
 
 ## Usage
 `fpm` defines the `fpm::fixed` class, which is templated on the underlying integer type and the number of bits in the fraction:
@@ -36,8 +36,13 @@ namespace fpm
 	using fixed_16_16 = fixed<std::int32_t, std::int64_t, 16>;  // Q16.16 format
 	using fixed_24_8  = fixed<std::int32_t, std::int64_t, 8>;   // Q24.8 format
 	using fixed_8_24  = fixed<std::int32_t, std::int64_t, 24>;  // Q8.24 format
+
+	// 64-bit base types, with a 128-bit intermediate type (FPM_INT128)
+	using fixed_32_32 = fixed<std::int64_t, FPM_INT128, 32>;     // and fixed_56_8 ... fixed_8_56
 }
 ```
+The 64-bit types use `__int128` (GCC, Clang) or `std::_Signed128` (MSVC) as intermediate type. Define `FPM_INT128` to use another
+128-bit type, or `FPM_NO_INT128` to not use 128-bit integers at all (then the 64-bit types are not available).
 
 ## Mathematical functions
 FPM offers the header `<fpm/math.hpp>` with mathematical functions that operate on its fixed-point types, similar to `<math.hpp>` for floating-point types.
@@ -49,8 +54,12 @@ The available functions for fixed-point types include:
 * classification functions: `fpclassify`, `isnormal`, `isnan`, `isnormal`, etc.
 
 Notes:
-* all functions are in the `fpm` namespace.
+* all functions are in the `fpm` namespace, and all are `constexpr`.
 * certain functions will always return the same value (e.g. `isnan` and `isinf` will always return false).
+* `sqrt`, `cbrt` and `hypot` are correctly rounded; `floor`, `ceil`, `trunc`, `round`, `nearbyint`, `rint`, `modf`, `fmod`, `remainder` and `remquo` are exact.
+  Like their standard counterparts, `remainder` and `remquo` round the quotient to nearest (ties to even), and `pow(x, 0)` is 1 for any `x` (including 0).
+* the other functions are approximations: their polynomials are evaluated with extra precision (see [accuracy](accuracy.md)).
+* `exp`, `exp2` and `hypot` saturate to the maximum value instead of overflowing, and `exp`/`exp2`/`pow` give 0 for results too small to represent.
 * be mindful of a function's domain and range: the result of `pow` can quickly overflow with certain inputs. On the other hand, trigonometry functions such as `sin` require more bits in the fraction for accurate results.
 
 ## Specialized customization points

@@ -15,6 +15,28 @@
 
 namespace fpm
 {
+	// 128-bit integers: the intermediate type for 64-bit base types.
+	// Defined first, as they are also used for some calculations with smaller types.
+	// Define FPM_INT128 to provide your own type, or FPM_NO_INT128 to not use 128-bit integers.
+#if defined(FPM_INT128)
+	// Already defined
+#elif defined(FPM_NO_INT128)
+	// Explicitly disabled: no 64-bit base types
+#elif defined(__SIZEOF_INT128__)
+	using int128_t = __int128_t;
+	#define FPM_INT128 ::fpm::int128_t
+#elif defined(_WIN32) && defined(_MSC_VER)
+	using int128_t = std::_Signed128;
+	#define FPM_INT128 ::fpm::int128_t
+#else
+	#warning 128-bit numbers not supported.
+#endif
+
+#ifdef FPM_INT128
+	static_assert(sizeof(FPM_INT128) > sizeof(std::int64_t));
+	static_assert(std::numeric_limits<FPM_INT128>::is_signed);
+#endif
+
 	namespace detail
 	{
 		template<std::signed_integral BaseType, std::signed_integral IntermediateType, uint32_t FractionalBits>
@@ -114,7 +136,7 @@ namespace fpm
 		/// Like static_cast, this truncates bits that don't fit.
 		template<std::integral T>
 		inline constexpr explicit fixed(const T val) noexcept
-			: m_value(static_cast<BaseType>(val * FRACTION_MULT))
+			: m_value(integral_to_raw(val))
 		{}
 
 		/// Converts a floating-point number to the fixed-point type.
@@ -156,51 +178,6 @@ namespace fpm
 		{
 			return static_cast<T>(m_value / FRACTION_MULT);
 		}
-
-#pragma region fpm::fixed conversion
-
-		/// Change number of Fraction Bits.
-		template<typename I, uint32_t F, bool R>
-		[[nodiscard]] inline constexpr explicit operator fixed<BaseType, I, F, R>() const noexcept
-		{
-			static_assert(F != FractionBits);
-			if constexpr(F > FractionBits) // Target has more bits
-			{
-				return fixed<BaseType, I, F, R>::from_raw_value(m_value << (F - FractionBits));
-			}
-			else // F < FractionBits // Target has less bits
-			{
-				return fixed<BaseType, I, F, R>::from_raw_value(m_value >> (FractionBits - F));
-			}
-		}
-
-		/// Change Base Type.
-		template<typename B, typename I, bool R>
-		[[nodiscard]] inline constexpr explicit operator fixed<B, I, FractionBits, R>() const noexcept
-		{
-			static_assert(sizeof(B) != sizeof(BaseType));
-			return fixed<B, I, FractionBits, R>::from_raw_value(static_cast<B>(m_value));
-		}
-
-		/// Change Base Type and Fraction Bits.
-		template<typename B, typename I, uint32_t F, bool R>
-		[[nodiscard]] inline constexpr explicit operator fixed<B, I, F, R>() const noexcept
-		{
-			static_assert(F != FractionBits);
-			static_assert(sizeof(B) != sizeof(BaseType));
-			if constexpr(sizeof(B) > sizeof(BaseType)) // New type is greater
-			{
-				const auto f = static_cast<fixed<B, I, FractionBits, R>>(*this);
-				return static_cast<fixed<B, I, F, R>>(f);
-			}
-			else // sizeof(B) < sizeof(BaseType) // Old type is greater
-			{
-				const auto f = static_cast<fixed<BaseType, I, F, R>>(*this);
-				return static_cast<fixed<B, I, F, R>>(f);
-			}
-		}
-
-#pragma endregion
 
 #pragma endregion
 
@@ -250,10 +227,11 @@ namespace fpm
 			requires(NumFractionBits <= FractionBits)
 		inline static constexpr fixed from_fixed_point(T value) noexcept
 		{
+			using S = std::conditional_t<(std::is_signed_v<IntermediateType>), std::make_signed_t<T>, T>;
+			using Wider_t = std::conditional_t<(sizeof(S) >= sizeof(IntermediateType)), S, IntermediateType>;
+			// Left shifts are modular in C++20, so this truncates the bits that don't fit (like the other conversions)
 			return fixed(
-				static_cast<BaseType>(
-					value * (T(1) << (FractionBits - NumFractionBits))
-				),
+				static_cast<BaseType>(static_cast<Wider_t>(value) << (FractionBits - NumFractionBits)),
 				raw_construct_tag{}
 			);
 		}
@@ -281,38 +259,47 @@ namespace fpm
 		//! auto pi = fpm::fixed_16_16::from_custom_fraction<1000000>(3, 141592);
 		//! // pi now represents 3.141592
 		//! \endcode
-		template<uint64_t NumFraction, typename T>
-			requires(NumFraction > FRACTION_MULT)
+		template<uint64_t NumFraction, std::integral T>
 		[[nodiscard]] inline static constexpr fixed from_custom_fraction(T integer_value, T fraction_value) noexcept
 		{
-			const IntermediateType int_part = integer_value * (T(1) << FractionBits);
-			const IntermediateType frac_part = static_cast<IntermediateType>(fraction_value) * FRACTION_MULT / static_cast<IntermediateType>(NumFraction);
-			const IntermediateType two_frac_part = static_cast<IntermediateType>(fraction_value) * FRACTION_MULT * 2 / static_cast<IntermediateType>(NumFraction);
-			// To correctly round the last bit in the result, we need one more bit of information.
-			// We do this by multiplying by two before dividing and adding the LSB to the real result.
-			if constexpr(EnableRounding)
+			static_assert(NumFraction > 0, "The fraction's denominator must be positive");
+
+			// fraction_value * 2^(FractionBits+1) / NumFraction, truncated towards zero: one more bit than needed,
+			// to correctly round the last bit of the result.
+			// Calculated in the intermediate type, or in a 128-bit type if the denominator is too large for it
+			// (a fraction value up to the denominator, times 2^(FractionBits+1), must fit), or else by long division.
+			constexpr bool fits_intermediate = NumFraction <= static_cast<uint64_t>(std::numeric_limits<IntermediateType>::max() >> (FractionBits + 1));
+			IntermediateType two_frac_part;
+			if constexpr(fits_intermediate || !std::is_signed_v<IntermediateType>)
 			{
-				return fixed(
-					static_cast<BaseType>(int_part + frac_part + two_frac_part % 2),
-					raw_construct_tag{}
-				);
+				two_frac_part = static_cast<IntermediateType>(fraction_value) * FRACTION_MULT * 2 / static_cast<IntermediateType>(NumFraction);
 			}
 			else
 			{
-				return fixed(
-					static_cast<BaseType>(int_part + frac_part),
-					raw_construct_tag{}
+#ifdef FPM_INT128
+				two_frac_part = static_cast<IntermediateType>(
+					static_cast<FPM_INT128>(fraction_value) * (FPM_INT128{1} << (FractionBits + 1)) / static_cast<FPM_INT128>(NumFraction)
 				);
+#else
+				// Binary long division of the magnitude, in unsigned 64-bit arithmetic
+				const bool negative = fraction_value < 0;
+				const auto magnitude = negative ? uint64_t{0} - static_cast<uint64_t>(fraction_value) : static_cast<uint64_t>(fraction_value);
+				uint64_t remainder = magnitude % NumFraction;
+				uint64_t quotient = magnitude / NumFraction;
+				for(uint32_t i = 0; i < FractionBits + 1; ++i)
+				{
+					const bool bit = remainder >= NumFraction - remainder; // 2 * remainder >= NumFraction
+					remainder = bit ? remainder - (NumFraction - remainder) : remainder * 2;
+					quotient = (quotient << 1) | (bit ? 1 : 0);
+				}
+				two_frac_part = static_cast<IntermediateType>(negative ? uint64_t{0} - quotient : quotient);
+#endif
 			}
-		}
 
-		template<uint64_t NumFraction, typename T>
-			requires(NumFraction <= FRACTION_MULT)
-		[[nodiscard]] inline static constexpr fixed from_custom_fraction(T integer_value, T fraction_value) noexcept
-		{
-			const IntermediateType int_part = integer_value * (T(1) << FractionBits);
-			const IntermediateType frac_part = static_cast<IntermediateType>(fraction_value) * FRACTION_MULT / static_cast<IntermediateType>(NumFraction);
-
+			const IntermediateType int_part = static_cast<IntermediateType>(integer_value) * FRACTION_MULT;
+			const IntermediateType frac_part = EnableRounding
+				? two_frac_part / 2 + two_frac_part % 2 // round half away from zero
+				: two_frac_part / 2;                    // truncate towards zero
 			return fixed(
 				static_cast<BaseType>(int_part + frac_part),
 				raw_construct_tag{}
@@ -347,7 +334,7 @@ namespace fpm
 		template<std::integral I>
 		inline constexpr fixed& operator+=(I y) noexcept
 		{
-			m_value += y * FRACTION_MULT;
+			m_value += integral_to_raw(y);
 			return *this;
 		}
 
@@ -364,7 +351,7 @@ namespace fpm
 		template<std::integral I>
 		inline constexpr fixed& operator-=(I y) noexcept
 		{
-			m_value -= y * FRACTION_MULT;
+			m_value -= integral_to_raw(y);
 			return *this;
 		}
 
@@ -410,7 +397,7 @@ namespace fpm
 
 		inline constexpr fixed& operator/=(const fixed& y) noexcept
 		{
-			[[assume(y.m_value != 0)]];
+			assert(y.m_value != 0);
 			if constexpr(EnableRounding)
 			{
 				/*if constexpr(std::is_signed_v<BaseType> && FractionBits >= 1 && FractionBits <= sizeof(BaseType) * 8 - 1)
@@ -437,6 +424,7 @@ namespace fpm
 		template<std::integral I>
 		inline constexpr fixed& operator/=(I y) noexcept
 		{
+			assert(y != 0);
 			m_value /= y;
 			return *this;
 		}
@@ -446,6 +434,14 @@ namespace fpm
 #pragma endregion
 
 	private:
+		/// Raw value of an integer. Like static_cast, this truncates bits that don't fit (modular arithmetic, no overflow).
+		template<std::integral T>
+		[[nodiscard]] inline static constexpr BaseType integral_to_raw(const T val) noexcept
+		{
+			using U = std::make_unsigned_t<BaseType>;
+			return static_cast<BaseType>(static_cast<U>(static_cast<U>(val) << FractionBits));
+		}
+
 		BaseType m_value;
 	};
 
@@ -466,21 +462,7 @@ namespace fpm
 #pragma endregion
 
 #pragma region 64-bit Base
-#if defined(FPM_INT128)
-	// Already defined
-#elif defined(__SIZEOF_INT128__)
-	using int128_t = __int128_t;
-	#define FPM_INT128 ::fpm::int128_t
-#elif defined(_WIN32) && defined(_MSC_VER)
-	using int128_t = std::_Signed128;
-	#define FPM_INT128 ::fpm::int128_t
-#else
-	#warning 128-bit numbers not supported.
-#endif
-
 #ifdef FPM_INT128
-	static_assert(sizeof(FPM_INT128) > sizeof(std::int64_t));
-	static_assert(std::numeric_limits<FPM_INT128>::is_signed);
 
 	using fixed_56_8  = fixed<std::int64_t, FPM_INT128, 8>;
 	using fixed_48_16 = fixed<std::int64_t, FPM_INT128, 16>;
@@ -587,10 +569,7 @@ namespace fpm
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator/(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
 	{
-		{
-			const auto y_val = y.raw_value();
-			[[assume(y_val != 0)]];
-		}
+		assert(y.raw_value() != 0);
 		if constexpr(R)
 		{
 			//if constexpr(std::is_signed_v<B> && F >= 1 && F <= sizeof(B) * 8 - 1)
@@ -612,6 +591,7 @@ namespace fpm
 	template<typename B, typename I, uint32_t F, std::integral T, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator/(const fixed<B, I, F, R>& x, T y) noexcept
 	{
+		assert(y != 0);
 		return fixed<B, I, F, R>::from_raw_value(x.raw_value() / y);
 	}
 
@@ -708,6 +688,15 @@ namespace fpm
 // Specializations for customization points
 namespace std
 {
+	// `has_denorm` and `has_denorm_loss` are deprecated since C++23, but remain members of std::numeric_limits
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4996)
+#endif
+
 	template<typename B, typename I, uint32_t F, bool R>
 	struct hash<fpm::fixed<B,I,F,R>>
 	{
@@ -734,7 +723,7 @@ namespace std
 		static constexpr bool has_signaling_NaN = false;
 		static constexpr std::float_denorm_style has_denorm = std::denorm_absent;
 		static constexpr bool has_denorm_loss = false;
-		static constexpr std::float_round_style round_style = std::round_to_nearest;
+		static constexpr std::float_round_style round_style = R ? std::round_to_nearest : std::round_toward_zero;
 		static constexpr bool is_iec559 = false;
 		static constexpr bool is_bounded = true;
 		static constexpr bool is_modulo = std::numeric_limits<B>::is_modulo;
@@ -779,7 +768,8 @@ namespace std
 
 		static constexpr fpm::fixed<B,I,F,R> round_error() noexcept
 		{
-			return fpm::fixed<B,I,F,R>(1) / 2;
+			// 0.5, even for types that cannot represent 1
+			return fpm::fixed<B,I,F,R>::from_raw_value(static_cast<B>(B{1} << (F - 1)));
 		};
 
 		static constexpr fpm::fixed<B,I,F,R> denorm_min() noexcept
@@ -837,6 +827,11 @@ namespace std
 
 #pragma endregion
 
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 }
 
 #pragma region Type testing

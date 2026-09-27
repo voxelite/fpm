@@ -46,6 +46,7 @@ if(BUILD_TESTS)
     tests/basic_math.cpp
     tests/charconv.cpp
     tests/constexpr.cpp
+    tests/core.cpp
     tests/constants.cpp
     tests/conversion.cpp
     tests/classification.cpp
@@ -58,6 +59,7 @@ if(BUILD_TESTS)
     tests/input.cpp
     tests/int128.cpp
     tests/manip.cpp
+    tests/math_types.cpp
     tests/nearest.cpp
     tests/output.cpp
     tests/power.cpp
@@ -65,6 +67,9 @@ if(BUILD_TESTS)
     tests/type_conversion.cpp
   )
   target_link_libraries(fpm-test PUBLIC fpm gtest_main)
+
+  # A single test: the suite has tens of thousands of (parametrized) cases, too many for one process each
+  add_test(NAME fpm-test COMMAND fpm-test)
 
 endif()
 
@@ -161,7 +166,6 @@ if(BUILD_ACCURACY)
   add_executable(fpm-accuracy
       accuracy/accuracy.cpp
   )
-  set_target_properties(fpm-accuracy PROPERTIES CXX_STANDARD 14)
   target_link_libraries(fpm-accuracy PRIVATE fpm libfixmath)
 endif()
 
@@ -226,7 +230,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" AND GNUPLOT_FOUND AND BUILD_BENCHMARK)
     COMMENT "Converting performance data for GnuPlot"
   )
 
-  set(IMG_FILE_PERFORMANCE "{$DATA_DIR}/performance.png")
+  set(IMG_FILE_PERFORMANCE "${DATA_DIR}/performance.png")
   add_custom_command(
     OUTPUT ${IMG_FILE_PERFORMANCE}
     COMMAND ${GNUPLOT_EXECUTABLE} ${PROJECT_SOURCE_DIR}/benchmarks/benchmark.gnuplot

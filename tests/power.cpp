@@ -208,7 +208,8 @@ TEST(power, pow)
 		{
 			const auto pow_real = std::pow(base, exp);
 			const auto pow_fixed = static_cast<double>(pow(P(base), P(exp)));
-			EXPECT_TRUE(HasMaximumError(pow_fixed, pow_real, MAX_ERROR_PERC));
+			// Results can be smaller than the resolution of the type: allow an error of one epsilon
+			EXPECT_TRUE(HasMaximumError(pow_fixed, pow_real, MAX_ERROR_PERC, static_cast<double>(std::numeric_limits<P>::epsilon())));
 		}
 	}
 
@@ -216,8 +217,11 @@ TEST(power, pow)
 	EXPECT_EQ(P(1), pow(P(1), P(0)));
 	EXPECT_EQ(P(0), pow(P(0), P(1)));
 	EXPECT_EQ(P(1), pow(P(1), P(1)));
+	// Like std::pow: x^0 == 1 for any x, including 0
+	EXPECT_EQ(P(1), pow(P(0), P(0)));
+	EXPECT_EQ(P(1), pow(P(-3), P(0)));
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = pow(P(0), P(0)), "");
+	EXPECT_DEATH(auto v = pow(P(0), P(-1)), "");
 #endif
 }
 
@@ -259,8 +263,11 @@ TEST(power, pow_int)
 	EXPECT_EQ(P(1), pow(P(1), 0));
 	EXPECT_EQ(P(0), pow(P(0), 1));
 	EXPECT_EQ(P(1), pow(P(1), 1));
+	// Like std::pow: x^0 == 1 for any x, including 0
+	EXPECT_EQ(P(1), pow(P(0), 0));
+	EXPECT_EQ(P(1), pow(P(-3), 0));
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = pow(P(0), 0), "");
+	EXPECT_DEATH(auto v = pow(P(0), -1), "");
 #endif
 }
 
@@ -333,7 +340,6 @@ TEST(power, cbrt)
 		const auto cbrt_real = std::cbrt(value);
 		const auto cbrt_fixed = static_cast<double>(cbrt(P(value)));
 		EXPECT_TRUE(HasMaximumError(cbrt_fixed, cbrt_real, MAX_ERROR_PERC));
-		break;
 	}
 }
 

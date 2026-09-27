@@ -50,57 +50,28 @@ TEST(basic_math, remainder)
 
 TEST(basic_math, remquo)
 {
-	// remquo must return at least 3 bits of quotient
+	// Same remainder as `remainder`, and the quotient rounded to nearest (ties to even) like std::remquo:
+	// its sign and at least the 3 lowest bits
 	constexpr int QUO_MIN_SIZE = 1 << 3;
 
 	using P = fpm::fixed_16_16;
 
-	int quo = 999999;
-	EXPECT_EQ(P( 1.5), remquo(P( 9.5), P( 2), &quo));
-	EXPECT_EQ( 4, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-1.5), remquo(P(-9.5), P( 2), &quo));
-	EXPECT_EQ(-4, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P( 1.5), remquo(P( 9.5), P(-2), &quo));
-	EXPECT_EQ(-4, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-1.5), remquo(P(-9.5), P(-2), &quo));
-	EXPECT_EQ( 4, quo % QUO_MIN_SIZE);
-
-	EXPECT_EQ(P( 1), remquo(P( 9), P( 2), &quo));
-	EXPECT_EQ( 4, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-1), remquo(P(-9), P( 2), &quo));
-	EXPECT_EQ(-4, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P( 1), remquo(P( 9), P(-2), &quo));
-	EXPECT_EQ(-4, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-1), remquo(P(-9), P(-2), &quo));
-	EXPECT_EQ( 4, quo % QUO_MIN_SIZE);
-
-	EXPECT_EQ(P( 1), remquo(P( 11), P( 2), &quo));
-	EXPECT_EQ( 5, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-1), remquo(P(-11), P( 2), &quo));
-	EXPECT_EQ(-5, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P( 1), remquo(P( 11), P(-2), &quo));
-	EXPECT_EQ(-5, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-1), remquo(P(-11), P(-2), &quo));
-	EXPECT_EQ( 5, quo % QUO_MIN_SIZE);
-
-	EXPECT_EQ(P( 2.1), remquo(P( 5.1), P( 3), &quo));
-	EXPECT_EQ( 1, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-2.1), remquo(P(-5.1), P( 3), &quo));
-	EXPECT_EQ(-1, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P( 2.1), remquo(P( 5.1), P(-3), &quo));
-	EXPECT_EQ(-1, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-2.1), remquo(P(-5.1), P(-3), &quo));
-	EXPECT_EQ( 1, quo % QUO_MIN_SIZE);
-
-	EXPECT_EQ(P( 3.375), remquo(P( 97.125), P( 3.75), &quo));
-	EXPECT_EQ( 1, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-3.375), remquo(P(-97.125), P( 3.75), &quo));
-	EXPECT_EQ(-1, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P( 3.375), remquo(P( 97.125), P(-3.75), &quo));
-	EXPECT_EQ(-1, quo % QUO_MIN_SIZE);
-	EXPECT_EQ(P(-3.375), remquo(P(-97.125), P(-3.75), &quo));
-	EXPECT_EQ( 1, quo % QUO_MIN_SIZE);
-
-	EXPECT_EQ(P(0), remquo(P(0), P(1), &quo));
-	EXPECT_EQ(0, quo % QUO_MIN_SIZE);
+	const double values[][2] = {
+		{9.5, 2}, {-9.5, 2}, {9.5, -2}, {-9.5, -2},
+		{9, 2}, {-9, 2}, {9, -2}, {-9, -2},
+		{11, 2}, {-11, 2}, {11, -2}, {-11, -2},
+		{5.125, 3}, {-5.125, 3}, {5.125, -3}, {-5.125, -3},
+		{97.125, 3.75}, {-97.125, 3.75}, {97.125, -3.75}, {-97.125, -3.75},
+		{7.5, 1}, {6.5, 1}, {0, 1}, {1, 1000},
+	};
+	for(const auto& [x, y] : values)
+	{
+		int quo = 999999;
+		int quo_expected = 999999;
+		const double expected = std::remquo(x, y, &quo_expected);
+		EXPECT_EQ(P(expected), remquo(P(x), P(y), &quo)) << x << " / " << y;
+		EXPECT_EQ(quo_expected % QUO_MIN_SIZE, quo % QUO_MIN_SIZE) << x << " / " << y;
+		EXPECT_EQ(quo_expected < 0, quo < 0) << x << " / " << y;
+		EXPECT_EQ(remainder(P(x), P(y)), remquo(P(x), P(y), &quo));
+	}
 }

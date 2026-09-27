@@ -17,14 +17,19 @@ namespace fpm
 	}
 }
 
+/// Relative error at most `max_error`, or absolute error at most `max_abs_error`
+/// (for results that are too small to be represented with a relative precision)
 inline ::testing::AssertionResult HasMaximumError(
 	const double value,
 	const double reference,
-	const double max_error
+	const double max_error,
+	const double max_abs_error = 0
 )
 {
 	const auto diff = std::abs(value - reference);
-	if(reference < 1e-10 && diff <= max_error)
+	if(std::abs(reference) < 1e-10 && diff <= max_error)
+		return ::testing::AssertionSuccess();
+	if(diff <= max_abs_error)
 		return ::testing::AssertionSuccess();
 	if(std::abs(diff / reference) <= max_error)
 		return ::testing::AssertionSuccess();

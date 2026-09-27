@@ -113,6 +113,7 @@ struct Limits<fpm::fixed_8_24>
 	static constexpr fpm::fixed_8_24 max() noexcept { return fpm::fixed_8_24::from_raw_value( 2147483647); }
 };
 
+#ifdef FPM_INT128
 template<>
 struct Limits<fpm::fixed_32_32>
 {
@@ -182,6 +183,7 @@ struct Limits<fpm::fixed_48_16>
 	static constexpr fpm::fixed_48_16 min() noexcept { return fpm::fixed_48_16::from_raw_value(-9223372036854775807LL - 1); }
 	static constexpr fpm::fixed_48_16 max() noexcept { return fpm::fixed_48_16::from_raw_value( 9223372036854775807LL); }
 };
+#endif
 
 TYPED_TEST(customizations, numeric_limits)
 {

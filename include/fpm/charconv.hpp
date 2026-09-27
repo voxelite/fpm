@@ -78,9 +78,15 @@ namespace fpm
 				return negative ? 0 : static_cast<std::uint64_t>(std::numeric_limits<B>::max());
 		}
 
-		/// Exact decimal expansion of `magnitude / 2^F`.
+		/// Exact decimal expansion of `magnitude / 2^F`, or its first digits: generation stops after `max_significant`
+		/// significant digits or at fractional position `max_fraction_position` (1-based), and `sticky` tells whether
+		/// non-zero digits follow. That is enough to round to one digit less.
 		template<std::uint32_t F>
-		[[nodiscard]] constexpr decimal to_decimal(const std::uint64_t magnitude) noexcept
+		[[nodiscard]] constexpr decimal to_decimal(
+			const std::uint64_t magnitude,
+			const long long max_significant = std::numeric_limits<long long>::max(),
+			const long long max_fraction_position = std::numeric_limits<long long>::max()
+		) noexcept
 		{
 			static_assert(F >= 1 && F <= 64);
 			decimal d;
@@ -103,8 +109,13 @@ namespace fpm
 			std::uint64_t frac = magnitude << ((64 - F) % 64);
 			if constexpr(F < 64)
 				frac = (magnitude & ((std::uint64_t{1} << F) - 1)) << (64 - F);
-			while(frac != 0)
+			for(long long position = 1; frac != 0; ++position)
 			{
+				if(d.count >= max_significant || position > max_fraction_position)
+				{
+					d.sticky = true; // frac != 0: non-zero digits follow
+					break;
+				}
 				// Upper 64 bits of the 68-bit product frac * 10, computed without a wider type
 				const std::uint64_t hi = frac >> 32;
 				const std::uint64_t lo = frac & 0xFFFF'FFFFu;
@@ -125,11 +136,14 @@ namespace fpm
 			away_from_zero,   ///< round up in magnitude
 		};
 
-		/// Round `d` to `keep` significant digits.
+		/// Round `d` to `keep` significant digits. If `d` is not the full expansion (`sticky`),
+		/// it must have at least the digit after the rounding position (trailing zeros may have been trimmed).
 		constexpr void round_to(decimal& d, const long long keep, const rounding mode) noexcept
 		{
-			if(keep >= d.count)
+			if(keep >= d.count && !d.sticky)
 				return;
+			const bool more = d.sticky; // non-zero digits beyond the available ones
+			d.sticky = false;
 
 			bool up = true; // rounding::away_from_zero: the discarded digits are never all zero (no trailing zeros)
 			if(mode == rounding::nearest_even)
@@ -141,10 +155,10 @@ namespace fpm
 				}
 				else
 				{
-					const auto next = d.digits[keep];
+					const auto next = keep < d.count ? d.digits[keep] : std::uint8_t{0}; // (trimmed zeros)
 					if(next != 5)
 						up = next > 5;
-					else if(keep + 1 < d.count)
+					else if(keep + 1 < d.count || more)
 						up = true; // more than half: non-zero digits follow
 					else
 						up = keep > 0 && (d.digits[keep - 1] % 2) == 1; // exact tie: round to even
@@ -227,6 +241,15 @@ namespace fpm
 			return {mag, false};
 		}
 
+		inline constexpr std::array<std::uint64_t, 20> powers_of_10 = []
+		{
+			std::array<std::uint64_t, 20> p{};
+			p[0] = 1;
+			for(std::size_t i = 1; i < p.size(); ++i)
+				p[i] = p[i - 1] * 10;
+			return p;
+		}();
+
 		/// Exact conversion of a decimal to a fixed-point magnitude, rounded according to the type.
 		template<typename B, std::uint32_t F, bool R>
 		[[nodiscard]] constexpr conversion from_decimal(const decimal& d) noexcept
@@ -276,6 +299,45 @@ namespace fpm
 				len = static_cast<int>(position) + 1;
 			}
 
+			// Fast path: with fraction = D / 10^len for the integer D of the `len` digits, the bits are
+			// D * 2^F / 10^len, exactly rounded using the remainder of a single integer division.
+			if(!rest && len <= 19)
+			{
+				std::uint64_t digits = 0;
+				for(int i = 0; i < len; ++i)
+					digits = digits * 10 + frac[i];
+				const std::uint64_t pow10 = powers_of_10[len];
+
+				bool fast = false;
+				std::uint64_t quotient = 0;
+				std::uint64_t remainder = 0;
+				if(F < 64 && digits <= (std::numeric_limits<std::uint64_t>::max() >> (F % 64)))
+				{
+					const std::uint64_t numerator = digits << (F % 64);
+					quotient = numerator / pow10;
+					remainder = numerator % pow10;
+					fast = true;
+				}
+#ifdef FPM_INT128
+				else if constexpr(F < 64)
+				{
+					const auto numerator = static_cast<FPM_INT128>(digits) << F; // < 2^(64+63)
+					quotient = static_cast<std::uint64_t>(numerator / static_cast<FPM_INT128>(pow10));
+					remainder = static_cast<std::uint64_t>(numerator % static_cast<FPM_INT128>(pow10));
+					fast = true;
+				}
+#endif
+				if(fast)
+				{
+					// remainder / 10^len in [0, 1): compare with one half
+					const bool half = remainder >= pow10 - remainder;
+					const bool below_half = half ? (remainder != pow10 - remainder) : (remainder != 0);
+					if(quotient > limit - mag)
+						return {0, true};
+					return finish<B, R>(mag + quotient, half, below_half, d.negative);
+				}
+			}
+
 			// Binary digits of the fraction. Digits beyond `len` are zero and stay zero when doubling.
 			std::uint64_t bits = 0;
 			for(std::uint32_t i = 0; i < F; ++i)
@@ -287,6 +349,69 @@ namespace fpm
 			if(bits > limit - mag)
 				return {0, true};
 			return finish<B, R>(mag + bits, half, rest, d.negative);
+		}
+
+		/// Adds a digit of the significand; leading zeros are dropped, and the exponent tracks the position of the point.
+		/// `scale` is the exponent change per digit: 1 for decimal, 4 for hexadecimal (binary exponent).
+		constexpr void add_digit(decimal& d, const int value, const bool after_point, const int scale) noexcept
+		{
+			if(d.count == 0 && value == 0)
+			{
+				if(after_point)
+					d.exponent -= scale;
+				return;
+			}
+			if(d.count < max_digits)
+				d.digits[d.count++] = static_cast<std::uint8_t>(value);
+			else if(value != 0)
+				d.sticky = true;
+			if(!after_point)
+				d.exponent += scale;
+		}
+
+		/// Exact conversion of hexadecimal digits (value = 0.h[0]h[1]... * 2^exponent) to a fixed-point magnitude
+		template<typename B, std::uint32_t F, bool R>
+		[[nodiscard]] constexpr conversion from_hex_digits(const decimal& d) noexcept
+		{
+			// Every bit has a known position relative to the fixed-point grid
+			const auto limit = max_magnitude<B>(d.negative);
+			std::uint64_t mag = 0;
+			bool half = false;
+			bool rest = d.sticky;
+			for(int i = 0; i < d.count; ++i)
+			{
+				for(int b = 0; b < 4; ++b)
+				{
+					if(((d.digits[i] >> b) & 1) == 0)
+						continue;
+					const long long position = d.exponent - 4 * (i + 1) + b + static_cast<long long>(F);
+					if(position >= 64)
+						return {0, true};
+					if(position >= 0)
+					{
+						const auto bit = std::uint64_t{1} << position;
+						if(bit > limit - mag)
+							return {0, true};
+						mag += bit;
+					}
+					else if(position == -1)
+					{
+						half = true;
+					}
+					else
+					{
+						rest = true;
+					}
+				}
+			}
+			return finish<B, R>(mag, half, rest, d.negative);
+		}
+
+		/// The raw value of a converted magnitude
+		template<typename B>
+		[[nodiscard]] constexpr B to_raw(const std::uint64_t magnitude, const bool negative) noexcept
+		{
+			return static_cast<B>(negative ? std::uint64_t{0} - magnitude : magnitude);
 		}
 
 		[[nodiscard]] constexpr char to_lower(const char c) noexcept
@@ -665,17 +790,21 @@ namespace fpm
 			return w.result();
 		}
 
+		// Only the digits up to and including the rounding digit are generated
 		const long long p = precision < 0 ? 6 : precision;
-		auto d = to_decimal<F>(magnitude(value.raw_value()));
-		d.negative = value.raw_value() < 0;
+		const auto mag = magnitude(value.raw_value());
 
 		if(fmt == std::chars_format::fixed)
 		{
+			auto d = to_decimal<F>(mag, std::numeric_limits<long long>::max(), p + 1);
+			d.negative = value.raw_value() < 0;
 			round_to(d, d.exponent + p, rounding::nearest_even);
 			write_fixed(w, d, p);
 		}
 		else if(fmt == std::chars_format::scientific)
 		{
+			auto d = to_decimal<F>(mag, p + 2);
+			d.negative = value.raw_value() < 0;
 			round_to(d, p + 1, rounding::nearest_even);
 			write_scientific(w, d, p);
 		}
@@ -683,6 +812,8 @@ namespace fpm
 		{
 			// "%g": the precision is the number of significant digits, and trailing zeros are removed
 			const long long significant = (p == 0) ? 1 : p;
+			auto d = to_decimal<F>(mag, significant + 1);
+			d.negative = value.raw_value() < 0;
 			round_to(d, significant, rounding::nearest_even);
 			const long long x = d.count == 0 ? 0 : d.exponent - 1;
 			if(significant > x && x >= -4)
@@ -747,8 +878,7 @@ namespace fpm
 		const int base = is_hex ? 16 : 10;
 		const int digit_scale = is_hex ? 4 : 1; // exponent change per digit (binary for hex, decimal otherwise)
 
-		// Significand: leading zeros are dropped; the exponent tracks the position of the point.
-		// For hex, `digits` holds hex digits and the exponent is binary.
+		// Significand
 		bool any_digit = false;
 		bool seen_point = false;
 		for(; p != last; ++p)
@@ -762,18 +892,7 @@ namespace fpm
 			if(v < 0)
 				break;
 			any_digit = true;
-			if(d.count == 0 && v == 0)
-			{
-				if(seen_point)
-					d.exponent -= digit_scale;
-				continue;
-			}
-			if(d.count < max_digits)
-				d.digits[d.count++] = static_cast<std::uint8_t>(v);
-			else if(v != 0)
-				d.sticky = true;
-			if(!seen_point)
-				d.exponent += digit_scale;
+			add_digit(d, v, seen_point, digit_scale);
 		}
 		if(!any_digit)
 			return {first, std::errc::invalid_argument};
@@ -796,59 +915,11 @@ namespace fpm
 			return {first, std::errc::invalid_argument};
 
 		d.trim();
-		conversion c;
-		if(!is_hex)
-		{
-			c = from_decimal<B, F, R>(d);
-		}
-		else
-		{
-			// Value = 0.h[0]h[1]... * 2^exponent: every bit has a known position relative to the fixed-point grid
-			const auto limit = max_magnitude<B>(d.negative);
-			std::uint64_t mag = 0;
-			bool half = false;
-			bool rest = d.sticky;
-			for(int i = 0; i < d.count && !c.out_of_range; ++i)
-			{
-				for(int b = 0; b < 4; ++b)
-				{
-					if(((d.digits[i] >> b) & 1) == 0)
-						continue;
-					const long long position = d.exponent - 4 * (i + 1) + b + static_cast<long long>(F);
-					if(position >= 64)
-					{
-						c.out_of_range = true;
-						break;
-					}
-					if(position >= 0)
-					{
-						const auto bit = std::uint64_t{1} << position;
-						if(bit > limit - mag)
-						{
-							c.out_of_range = true;
-							break;
-						}
-						mag += bit;
-					}
-					else if(position == -1)
-					{
-						half = true;
-					}
-					else
-					{
-						rest = true;
-					}
-				}
-			}
-			if(!c.out_of_range)
-				c = finish<B, R>(mag, half, rest, d.negative);
-		}
-
+		const conversion c = is_hex ? from_hex_digits<B, F, R>(d) : from_decimal<B, F, R>(d);
 		if(c.out_of_range)
 			return {p, std::errc::result_out_of_range};
 
-		const auto raw = d.negative ? std::uint64_t{0} - c.magnitude : c.magnitude;
-		value = fixed<B, I, F, R>::from_raw_value(static_cast<B>(raw));
+		value = fixed<B, I, F, R>::from_raw_value(to_raw<B>(c.magnitude, d.negative));
 		return {p, std::errc{}};
 	}
 

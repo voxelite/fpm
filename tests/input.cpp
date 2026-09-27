@@ -299,6 +299,88 @@ TEST_F(input, overflow)
 	test_conversion("-1000000000000000000000000000000000000000000000", std::numeric_limits<P>::min());
 }
 
+TEST_F(input, overflow_saturates)
+{
+	using P = fpm::fixed_16_16;
+	const auto max = std::numeric_limits<P>::max();
+	const auto lowest = std::numeric_limits<P>::lowest();
+
+	// Just out of range: these used to wrap around
+	test_conversion("32768", max);
+	test_conversion("-32769", lowest);
+	test_conversion("40000", max);
+	test_conversion("4e4", max);
+	test_conversion("32767.999993", max);  // rounds up to 32768
+	test_conversion("-32768.000008", lowest);
+
+	// Exactly in range
+	test_conversion("-32768", lowest);
+	test_conversion("32767.99998", max);
+	test_conversion("32767.99999", max);   // rounds down to the maximum
+
+	// Huge binary exponents (used to be undefined behavior)
+	test_conversion("0x1p100", max);
+	test_conversion("-0x1p100", lowest);
+	test_conversion("0x1p-100", P(0));
+	test_conversion("0x1p2147483647", max);
+
+	// Huge decimal exponents are fast
+	test_conversion("1e-2000000000", P(0));
+	test_conversion("1e2000000000", max);
+}
+
+TEST_F(input, rounding)
+{
+	using P = fpm::fixed_16_16;
+	// Exactly rounded to nearest, ties to even (like std::from_chars)
+	test_conversion("0.00000762939453125", P(0));                              // 0.5 epsilon
+	test_conversion("0.0000076293945312500001", P::from_raw_value(1));          // just over 0.5 epsilon
+	test_conversion("0.00002288818359375", P::from_raw_value(2));              // 1.5 epsilon
+	test_conversion("1.00001525878906250000000000000000001", P::from_raw_value(0x10001));
+	test_conversion("123456789012345678901234567890e-26", P(1234.5678901234567));
+}
+
+TEST_F(input, case_insensitive_infinity)
+{
+	using P = fpm::fixed_16_16;
+	test_conversion("INF", std::numeric_limits<P>::max());
+	test_conversion("-Infinity", std::numeric_limits<P>::lowest());
+}
+
+TEST_F(input, non_ascii)
+{
+	// Characters outside of ASCII end the input (and are not undefined behavior in classification)
+	test_invalid_conversion("\xE9", "\xE9");
+	test_conversion("1.5\xE9", fpm::fixed_16_16(1.5), "\xE9");
+}
+
+TEST(input_types, round_trip)
+{
+	// Output with enough precision and reading back gives the same value, for many types
+	const auto check = []<typename P>(P)
+	{
+		for(const double v : {0.0, 1.0, -1.0, 0.1, -3.14159, 100.25, 1.0 / 3})
+		{
+			const P x(v);
+			std::stringstream ss;
+			ss << std::setprecision(std::numeric_limits<P>::max_digits10) << x;
+			P y{};
+			ss >> y;
+			EXPECT_EQ(x, y) << ss.str();
+		}
+	};
+	check(fpm::fixed_8_8{});
+	check(fpm::fixed_16_16{});
+	check(fpm::fixed_24_8{});
+	check(fpm::fixed_8_24{});
+#ifdef FPM_INT128
+	check(fpm::fixed_32_32{});
+	check(fpm::fixed_48_16{});
+	check(fpm::fixed_16_48{});
+	check(fpm::fixed_8_56{});
+#endif
+}
+
 TEST_F(input, infinity)
 {
 	using P = fpm::fixed_16_16;

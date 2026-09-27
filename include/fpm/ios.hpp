@@ -6,10 +6,10 @@
 #include <climits>
 #include <limits>
 #include <ios>
-#include <vector>
 #include <version>
 #include <format>
 #include <sstream>
+#include <span>
 #include <string_view>
 #include <iomanip>
 
@@ -19,508 +19,217 @@
 
 namespace fpm
 {
-	template<typename CharT, typename B, typename I, uint32_t F, bool R>
-	std::basic_ostream<CharT>& operator<<(std::basic_ostream<CharT>& os, fixed<B, I, F, R> x) noexcept
+	namespace detail
 	{
-		const auto uppercase = ((os.flags() & std::ios_base::uppercase) != 0);
-		const auto showpoint = ((os.flags() & std::ios_base::showpoint) != 0);
-		const auto adjustfield = (os.flags() & std::ios_base::adjustfield);
-		const auto width = os.width();
-		const auto& ctype = std::use_facet<std::ctype<CharT>>(os.getloc());
-		const auto& numpunct = std::use_facet<std::numpunct<CharT>>(os.getloc());
-
-		auto floatfield = (os.flags() & std::ios_base::floatfield);
-		auto precision = os.precision();
-		auto show_trailing_zeros = true;
-		auto use_significant_digits = false;
-
-		// Invalid precision? Reset to the default
-		if(precision < 0)
-			precision = 6;
-
-		// Output buffer. Needs to be big enough for the formatted number without padding.
-		// Optional prefixes (i.e. "+"/"-", decimal separator, exponent "e+/-" and/or "0x").
-		constexpr auto worst_case_constant_size = 6;
-		// Maximum number of digits from the base type (covers integral + fractional digits)
-		constexpr auto worst_case_digit_count = std::numeric_limits<B>::digits10 + 2;
-		// Exponent suffixes (i.e. maximum digits based on log of the base type size).
-		// Needs a log10, but that isn't constexpr, so we're over-allocating on the stack. Can't hurt.
-		constexpr auto worst_case_suffix_size = std::numeric_limits<B>::digits;
-		// Double the digit count: in the worst case the thousands grouping add a character per digit.
-		using buffer_t = std::array<CharT, worst_case_constant_size + worst_case_digit_count * 2 + worst_case_suffix_size>;
-		buffer_t buffer;
-
-		// Output cursor
-		auto end = buffer.begin();
-
-		// Keep track of the start of "internal" padding
-		typename buffer_t::iterator internal_pad = buffer.end();
-
-		// Representation of a number.
-		// The value of the number is: raw / divisor * (10|2) ^ exponent
-		// The base of the exponent is 2 in hexfloat mode, or 10 otherwise.
-		struct number_t
+		/// Applies the alternate form ('#' in printf and std::format, std::showpoint for streams) to the output of
+		/// `to_chars` for the given `type` ('a', 'e', 'f', 'g', or '\0' for the general format with a precision):
+		/// the decimal point is always shown, and for 'g' trailing zeros are kept to show `precision` significant digits.
+		inline void apply_alternate_form(std::string& text, const char type, const int precision)
 		{
-			I raw;          // raw fixed-point value
-			I divisor;      // the divisor indicating the place of the decimal point
-			int exponent;   // the exponent applied
-		};
+			const auto exponent_pos = text.find_first_of(type == 'a' ? "p" : "e");
+			const auto mantissa_end = (exponent_pos == std::string::npos) ? text.size() : exponent_pos;
+			if(text.find('.') == std::string::npos)
+				text.insert(mantissa_end, 1, '.');
 
-		// Convert a value without exponent to scientific representation
-		// where the part before the decimal point is less than 10.
-		const auto as_scientific = [](number_t value)
-		{
-			assert(value.exponent == 0);
-			if(value.raw > 0)
+			if(type == 'g' || type == '\0')
 			{
-				while(value.raw / 10 >= value.divisor)
+				const auto significant_wanted = static_cast<std::size_t>(precision == 0 ? 1 : (precision < 0 ? 6 : precision));
+				const auto end_pos = text.find_first_of("e");
+				const auto end = (end_pos == std::string::npos) ? text.size() : end_pos;
+				std::size_t significant = 0;
+				bool leading = true;
+				for(std::size_t i = 0; i < end; ++i)
 				{
-					value.divisor *= 10;
-					++value.exponent;
+					const char c = text[i];
+					if(c < '0' || c > '9' || (leading && c == '0'))
+						continue;
+					leading = false;
+					++significant;
 				}
-				while(value.raw < value.divisor)
-				{
-					 value.raw *= 10;
-					--value.exponent;
-				}
-			}
-			return value;
-		};
-
-		number_t value = { x.raw_value(), I{1} << F, 0};
-
-		auto base = B{10};
-
-		// First write the sign
-		if(value.raw < 0)
-		{
-			*end++ = ctype.widen('-');
-			value.raw = -value.raw;
-			internal_pad = end;
-		}
-		else if(os.flags() & std::ios_base::showpos)
-		{
-			*end++ = ctype.widen('+');
-			internal_pad = end;
-		}
-		assert(value.raw >= 0);
-
-		switch (floatfield)
-		{
-			case std::ios_base::fixed | std::ios_base::scientific:
-			{
-				// Hexadecimal mode: figure out the hexadecimal exponent and write "0x"
-				if(value.raw > 0)
-				{
-					int32_t bit  = detail::find_highest_bit(value.raw);
-					value.exponent = bit - F;    // exponent is applied to base 2
-					value.divisor = I{1} << bit; // divisor is at the highest bit, ensuring it starts with "1."
-					precision = (bit + 3) / 4;   // precision is number of nibbles, so we show all of them
-				}
-				base = 16;
-				show_trailing_zeros = false; // Always strip trailing zeros in hexfloat mode
-
-				*end++ = ctype.widen('0');
-				*end++ = ctype.widen(uppercase ? 'X' : 'x');
-				break;
-			}
-
-			case std::ios_base::scientific:
-			{
-				// Scientific mode, normalize value to scientific notation
-				value = as_scientific(value);
-				break;
-			}
-
-			case std::ios_base::fixed:
-				// Fixed mode. Nothing to do.
-				break;
-
-			default:
-			{
-				// "auto" mode: figure out the exponent
-				const number_t sci_value = as_scientific(value);
-
-				// Now `precision` indicates the number of *significant digits* (not fractional digits).
-				use_significant_digits = true;
-				precision = std::max<std::streamsize>(precision, 1);
-
-				if(sci_value.exponent >= precision || sci_value.exponent < -4)
-				{
-					// Display as scientific format
-					floatfield = std::ios_base::scientific;
-					value = sci_value;
-				}
-				else
-				{
-					// Display as fixed format.
-					// "showpoint" indicates whether or not we show trailing zeros
-					floatfield = std::ios_base::fixed;
-					show_trailing_zeros = showpoint;
-				}
-				break;
-			}
-		};
-
-		// If we didn't write a sign, any internal padding starts here
-		// (after a potential "0x" for hexfloats).
-		if(internal_pad == buffer.end())
-		{
-			internal_pad = end;
-		}
-
-		// Separate out the integral part of the number
-		I integral = value.raw / value.divisor;
-		value.raw %= value.divisor;
-
-		// Here we start printing the number itself
-		const char* const digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
-		const auto digits_start = end;
-
-		// Are we already printing significant digits? (yes if we're not counting significant digits)
-		bool significant_digits = !use_significant_digits;
-
-		// Print the integral part
-		int last_digit = 0;
-		if(integral == 0)
-		{
-			*end++ = ctype.widen('0');
-			if(value.raw == 0)
-			{
-				// If the fraction is zero too, all zeros including the integral count
-				// as significant digits.
-				significant_digits = true;
+				if(leading)
+					significant = 1; // zero: "0" counts as one significant digit
+				if(significant < significant_wanted)
+					text.insert(end, significant_wanted - significant, '0');
 			}
 		}
-		else
-		{
-			while(integral > 0)
-			{
-				last_digit = integral % base;
-				*end++ = ctype.widen(digits[last_digit]);
-				integral /= base;
-			}
-			std::reverse(digits_start, end);
-			significant_digits = true;
-		}
-
-		if(use_significant_digits && significant_digits)
-		{
-			// Apparently the integral part was significant; subtract its
-			// length from the remaining significant digits.
-			precision -= (end - digits_start);
-		}
-
-		// At this point, `value` contains only the fraction and
-		// `precision` holds the number of digits to print.
-		assert(value.raw < value.divisor);
-		assert(precision >= 0);
-
-		// Location of decimal point
-		typename buffer_t::iterator point = buffer.end();
-
-		// Start (and length) of the trailing zeros to insert while printing
-		// By tracking this to print them later instead of actually printing them now,
-		// we can support large precisions with a small printing buffer.
-		typename buffer_t::iterator trailing_zeros_start = buffer.end();
-		std::streamsize trailing_zeros_count = 0;
-
-		if(precision > 0)
-		{
-			// Print the fractional part
-			*(point = end++) = numpunct.decimal_point();
-
-			for(int i = 0; i < precision; ++i)
-			{
-				if(value.raw == 0)
-				{
-					// The rest of the digits are all zeros, mark them
-					// to be printed in this spot.
-					trailing_zeros_start = end;
-					trailing_zeros_count = precision - i;
-					break;
-				}
-
-				// Shift the divisor if we can to avoid overflow on the value
-				if(value.divisor % base == 0)
-					value.divisor /= base;
-				else
-					value.raw *= base;
-				assert(value.divisor > 0);
-				assert(value.raw >= 0);
-				last_digit = (value.raw / value.divisor) % base;
-				value.raw %= value.divisor;
-				*end++ = ctype.widen(digits[last_digit]);
-
-				if(!significant_digits)
-				{
-					// We're still finding the first significant digit
-					if(last_digit != 0)
-					{
-						// Found it
-						significant_digits = true;
-					}
-					else
-					{
-						// Not yet; increment number of digits to print
-						++precision;
-					}
-				}
-			}
-		}
-		else if(showpoint)
-		{
-			// No fractional part to print, but we still want the point
-			*(point = end++) = numpunct.decimal_point();
-		}
-
-		// Insert `ch` into the output at `position`, updating all references accordingly
-		const auto insert_character = [&](typename buffer_t::iterator position, CharT ch)
-		{
-			assert(position >= buffer.begin() && position < end);
-			std::move_backward(position, end, end + 1);
-			if(point != buffer.end() && position < point)
-			{
-				++point;
-			}
-			if(trailing_zeros_start != buffer.end() && position < trailing_zeros_start)
-			{
-				++trailing_zeros_start;
-			}
-			++end;
-			*position = ch;
-		};
-
-		// Round the number: round to nearest
-		bool increment = false;
-		if(value.raw > value.divisor / 2)
-		{
-			// Round up
-			increment = true;
-		} else if(value.raw == value.divisor / 2)
-		{
-			// It's a tie (i.e. "xyzw.5"): round to even
-			increment = ((last_digit % 2) == 1);
-		}
-
-		if(increment)
-		{
-			auto p = end - 1;
-			// Increment all digits backwards while we see "9"
-			while(p >= digits_start)
-			{
-				if(p == point)
-				{
-					// Skip over the decimal point
-					--p;
-				}
-				if((*p)++ != ctype.widen('9'))
-				{
-					break;
-				}
-				*p-- = ctype.widen('0');
-			}
-
-			if(p < digits_start)
-			{
-				// We've incremented all the way to the start (all 9's), we need to insert the
-				// carried-over 1 from incrementing the last 9.
-				assert(p == digits_start - 1);
-				insert_character(++p, ctype.widen('1'));
-
-				if(floatfield == std::ios::scientific)
-				{
-					// We just made the integral part equal to 10, so we shift the decimal point
-					// back one place (if any) and tweak the exponent, so that we keep the integer part
-					// less than 10.
-					if(point != buffer.end())
-					{
-						assert(p + 2 == point);
-						std::swap(*(point - 1), *point);
-						--point;
-					}
-					++value.exponent;
-
-					// We've introduced an extra digit so we need to strip the last digit
-					// to maintain the same precision
-					--end;
-				}
-			}
-
-			if(use_significant_digits && *p == ctype.widen('1') && point != buffer.end())
-			{
-				// We've converted a leading zero to a 1 so we need to strip the last digit
-				// (behind the decimal point) to maintain the same significant digit count.
-				--end;
-			}
-		}
-
-		if(point != buffer.end())
-		{
-			if(!show_trailing_zeros)
-			{
-				// Remove trailing zeros
-				while(*(end - 1) == ctype.widen('0'))
-				{
-					--end;
-				}
-
-				// Also clear the "trailing zeros to append during printing" range
-				trailing_zeros_start = buffer.end();
-				trailing_zeros_count = 0;
-			}
-
-			if(end - 1 == point && trailing_zeros_count == 0 && !showpoint)
-			{
-				// Remove the decimal point, too
-				--end;
-			}
-		}
-
-		// Apply thousands grouping
-		const auto& grouping = numpunct.grouping();
-		if(!grouping.empty())
-		{
-			// Step backwards from the end or decimal point, inserting the
-			// thousands separator at every group interval.
-			const CharT thousands_sep = ctype.widen(numpunct.thousands_sep());
-			std::size_t group = 0;
-			auto p = point != buffer.end() ? point : end;
-			auto size = static_cast<int>(grouping[group]);
-			while(size > 0 && size < CHAR_MAX && p - digits_start > size)
-			{
-				p -= size;
-				insert_character(p, thousands_sep);
-				if(group < grouping.size() - 1)
-				{
-					size = static_cast<int>(grouping[++group]);
-				}
-			}
-		}
-
-		// Print the exponent if required
-		assert(floatfield != 0);
-		if(floatfield & std::ios_base::scientific)
-		{
-			// Hexadecimal (%a/%A) or decimal (%e/%E) scientific notation
-			if(floatfield & std::ios_base::fixed)
-				*end++ = ctype.widen(uppercase ? 'P' : 'p');
-			else
-				*end++ = ctype.widen(uppercase ? 'E' : 'e');
-
-			if(value.exponent < 0)
-			{
-				*end++ = ctype.widen('-');
-				value.exponent = -value.exponent;
-			}
-			else
-			{
-				*end++ = ctype.widen('+');
-			}
-
-			if(floatfield == std::ios_base::scientific)
-			{
-				// In decimal scientific notation (%e/%E), the exponent is at least two digits
-				if(value.exponent < 10)
-					*end++ = ctype.widen('0');
-			}
-
-			const auto exponent_start = end;
-			if(value.exponent == 0)
-			{
-				*end++ = ctype.widen('0');
-			}
-			else
-			{
-				while(value.exponent > 0)
-				{
-					*end++ = ctype.widen(digits[value.exponent % 10]);
-					value.exponent /= 10;
-				}
-			}
-			std::reverse(exponent_start, end);
-		}
-
-		// Write character `ch` `count` times to the stream
-		const auto sputcn = [&](CharT ch, std::streamsize count)
-		{
-			// Fill a buffer to output larger chunks
-			constexpr std::streamsize chunk_size = 64;
-			std::array<CharT, chunk_size> fill_buffer;
-			std::fill_n(fill_buffer.begin(), std::min(count, chunk_size), ch);
-
-			for(std::streamsize size, left = count; left > 0; left -= size)
-			{
-				size = std::min(chunk_size, left);
-				os.rdbuf()->sputn(&fill_buffer[0], size);
-			}
-		};
-
-		// Outputs a range of characters, making sure to output the trailing zeros range
-		// if it lies in the specified range
-		const auto put_range = [&](typename buffer_t::const_iterator begin, typename buffer_t::const_iterator end)
-		{
-			assert(end >= begin);
-			if(trailing_zeros_start >= begin && trailing_zeros_start <= end)
-			{
-				// Print range with trailing zeros range in the middle
-				assert(trailing_zeros_count > 0);
-				os.rdbuf()->sputn(&*begin, trailing_zeros_start - begin);
-				sputcn(ctype.widen('0'), trailing_zeros_count);
-				os.rdbuf()->sputn(&*trailing_zeros_start, end - trailing_zeros_start);
-			}
-			else
-			{
-				// Print range as-is
-				os.rdbuf()->sputn(&*begin, end - begin);
-			}
-		};
-
-		// Pad the buffer if necessary.
-		// Note that the length of trailing zeros is counted towards the length of the content.
-		const auto content_size = end - buffer.begin() + trailing_zeros_count;
-		if(content_size >= width)
-		{
-			// Buffer needs no padding, output as-is
-			put_range(buffer.begin(), end);
-		}
-		else
-		{
-			const auto pad_size = width - content_size;
-			switch (adjustfield)
-			{
-				case std::ios_base::left:
-				{
-					// Content is left-aligned, so output the buffer, followed by the padding
-					put_range(buffer.begin(), end);
-					sputcn(os.fill(), pad_size);
-					break;
-				}
-				case std::ios_base::internal:
-				{
-					// Content is internally aligned, so output the buffer up to the "internal pad"
-					// point, followed by the padding, followed by the remainder of the buffer.
-					put_range(buffer.begin(), internal_pad);
-					sputcn(os.fill(), pad_size);
-					put_range(internal_pad, end);
-					break;
-				}
-				default:
-				{
-					// Content is right-aligned, so output the padding, followed by the buffer
-					sputcn(os.fill(), pad_size);
-					put_range(buffer.begin(), end);
-					break;
-				}
-			}
-		}
-
-		// Width is reset after every write
-		os.width(0);
-
-		return os;
 	}
 
+	/// Prints like a floating-point number: supports the float field (fixed, scientific, hexfloat and default),
+	/// precision, showpoint, showpos, uppercase, width, fill, adjustfield and the locale's decimal point and grouping.
+	/// The digits are exactly rounded (ties to even).
+	template<typename CharT, typename Traits, typename B, typename I, uint32_t F, bool R>
+	std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, fixed<B, I, F, R> x)
+	{
+		// A formatted output function: does nothing if the stream is not ready
+		const typename std::basic_ostream<CharT, Traits>::sentry sentry(os);
+		if(!sentry)
+			return os;
+
+		const auto flags = os.flags();
+		const auto floatfield = flags & std::ios_base::floatfield;
+		const bool uppercase = (flags & std::ios_base::uppercase) != 0;
+		const bool hex = floatfield == (std::ios_base::fixed | std::ios_base::scientific);
+		const auto precision = static_cast<int>(std::min<std::streamsize>(os.precision() < 0 ? 6 : os.precision(), 1'000'000));
+
+		// The number in the "C" locale: in a stack buffer, unless a large precision needs more
+		std::array<char, 256> small_buffer;
+		std::string large_buffer;
+		std::span<char> buffer(small_buffer);
+		if(precision > 64)
+		{
+			large_buffer.resize(static_cast<std::size_t>(precision) + 160);
+			buffer = std::span<char>(large_buffer);
+		}
+		std::to_chars_result result;
+		char type;
+		if(floatfield == std::ios_base::fixed)
+		{
+			type = 'f';
+			result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), x, std::chars_format::fixed, precision);
+		}
+		else if(floatfield == std::ios_base::scientific)
+		{
+			type = 'e';
+			result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), x, std::chars_format::scientific, precision);
+		}
+		else if(hex)
+		{
+			// The precision is ignored for hexfloats: always exact
+			type = 'a';
+			result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), x, std::chars_format::hex);
+		}
+		else
+		{
+			type = 'g';
+			result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), x, std::chars_format::general, precision);
+		}
+		assert(result.ec == std::errc{});
+		std::string_view number(buffer.data(), static_cast<std::size_t>(result.ptr - buffer.data()));
+
+		std::string alternate;
+		if((flags & std::ios_base::showpoint) != 0)
+		{
+			alternate.assign(number);
+			detail::apply_alternate_form(alternate, type, precision);
+			number = alternate;
+		}
+
+		const std::locale locale = os.getloc();
+		const auto& ctype = std::use_facet<std::ctype<CharT>>(locale);
+		const auto& numpunct = std::use_facet<std::numpunct<CharT>>(locale);
+
+		// The output: sign, "0x" prefix and the widened digits with the locale's decimal point and grouping
+		std::array<CharT, 512> small_body;
+		std::basic_string<CharT> large_body;
+		std::span<CharT> body(small_body);
+		if(number.size() * 2 + 4 > small_body.size())
+		{
+			large_body.resize(number.size() * 2 + 4);
+			body = std::span<CharT>(large_body);
+		}
+		std::size_t body_length = 0;
+
+		if(!number.empty() && number.front() == '-')
+		{
+			body[body_length++] = ctype.widen('-');
+			number.remove_prefix(1);
+		}
+		else if((flags & std::ios_base::showpos) != 0)
+		{
+			body[body_length++] = ctype.widen('+');
+		}
+		const auto sign_length = body_length;
+		if(hex)
+		{
+			body[body_length++] = ctype.widen('0');
+			body[body_length++] = ctype.widen(uppercase ? 'X' : 'x');
+		}
+		const auto prefix_length = body_length;
+
+		const auto integral_digits = std::min(number.find_first_of(".ep"), number.size());
+		const std::string grouping = numpunct.grouping();
+		const CharT thousands_sep = numpunct.thousands_sep();
+		const CharT decimal_point = numpunct.decimal_point();
+		const bool grouped = !grouping.empty() && static_cast<unsigned char>(grouping[0]) != 0
+			&& static_cast<unsigned char>(grouping[0]) < static_cast<unsigned char>(CHAR_MAX);
+		for(std::size_t i = 0; i < number.size(); ++i)
+		{
+			char c = number[i];
+			if(uppercase && c >= 'a' && c <= 'z')
+				c = static_cast<char>(c - 'a' + 'A');
+			body[body_length++] = (c == '.') ? decimal_point : ctype.widen(c);
+
+			// Insert a separator after this digit if a group ends here (group sizes from the right)
+			if(grouped && i + 1 < integral_digits)
+			{
+				std::size_t remaining = integral_digits - (i + 1); // digits to the right of the separator
+				std::size_t group = 0;
+				while(true)
+				{
+					const auto size = static_cast<unsigned char>(grouping[std::min(group, grouping.size() - 1)]);
+					if(size == 0 || size >= static_cast<unsigned char>(CHAR_MAX) || remaining < size)
+						break; // no (further) grouping
+					remaining -= size;
+					if(remaining == 0)
+					{
+						body[body_length++] = thousands_sep;
+						break;
+					}
+					++group;
+				}
+			}
+		}
+
+		// Output with padding
+		auto* const buf = os.rdbuf();
+		bool ok = true;
+		const auto put = [&](const CharT* data, const std::size_t size)
+		{
+			if(size != 0 && buf->sputn(data, static_cast<std::streamsize>(size)) != static_cast<std::streamsize>(size))
+				ok = false;
+		};
+		const auto put_fill = [&](std::size_t count)
+		{
+			std::array<CharT, 32> fill;
+			fill.fill(os.fill());
+			for(; count > 0; count -= std::min(count, fill.size()))
+				put(fill.data(), std::min(count, fill.size()));
+		};
+
+		const auto width = os.width();
+		os.width(0);
+		const auto padding = static_cast<std::size_t>(std::max<std::streamsize>(0, width - static_cast<std::streamsize>(body_length)));
+		if(padding == 0)
+		{
+			put(body.data(), body_length);
+		}
+		else
+		{
+			const auto adjust = flags & std::ios_base::adjustfield;
+			if(adjust == std::ios_base::left)
+			{
+				put(body.data(), body_length);
+				put_fill(padding);
+			}
+			else if(adjust == std::ios_base::internal)
+			{
+				// Padding after the sign if there is one (like the standard library does for floating-point types),
+				// otherwise after the "0x" of hexfloats
+				const auto internal = (sign_length > 0) ? sign_length : prefix_length;
+				put(body.data(), internal);
+				put_fill(padding);
+				put(body.data() + internal, body_length - internal);
+			}
+			else
+			{
+				put_fill(padding);
+				put(body.data(), body_length);
+			}
+		}
+		if(!ok)
+			os.setstate(std::ios_base::badbit);
+		return os;
+	}
 
 	template<typename CharT, class Traits, typename B, typename I, uint32_t F, bool R>
 	std::basic_istream<CharT, Traits>& operator>>(std::basic_istream<CharT, Traits>& is, fixed<B, I, F, R>& x)
@@ -539,7 +248,7 @@ namespace fpm
 		{
 			// Note: allowing ['p', 'i', 'n', 't', 'y'] is technically in violation of the spec (we are emulating std::num_get),
 			// but otherwise we cannot parse hexfloats and "infinity". This is a known issue with the spec (LWG #2381).
-			return std::isxdigit(ch) ||
+			return std::isxdigit(static_cast<unsigned char>(ch)) ||
 				ch == 'x' || ch == 'X' || ch == 'p' || ch == 'P' ||
 				ch == 'i' || ch == 'I' || ch == 'n' || ch == 'N' ||
 				ch == 't' || ch == 'T' || ch == 'y' || ch == 'Y' ||
@@ -555,11 +264,11 @@ namespace fpm
 					is.setstate(std::ios::eofbit);
 					return '\0';
 				}
-				if(ch == numpunct.decimal_point())
+				if(Traits::to_char_type(ch) == numpunct.decimal_point())
 				{
 					return '.';
 				}
-				if(ch == numpunct.thousands_sep())
+				if(Traits::to_char_type(ch) == numpunct.thousands_sep())
 				{
 					if(!supports_thousands_separators || !thousands_separator_allowed)
 					{
@@ -569,7 +278,7 @@ namespace fpm
 					is.rdbuf()->sbumpc();
 					continue;
 				}
-				auto res = ctype.narrow(ch, 0);
+				auto res = ctype.narrow(Traits::to_char_type(ch), 0);
 				if(!is_valid_character(res))
 				{
 					// Invalid character: end input
@@ -605,7 +314,7 @@ namespace fpm
 		const char infinity[] = "infinity";
 		// Must be "inf" or "infinity"
 		int i = 0;
-		while(i < 8 && ch == infinity[i])
+		while(i < 8 && std::tolower(static_cast<unsigned char>(ch)) == infinity[i])
 		{
 			++i;
 			ch = next();
@@ -624,13 +333,13 @@ namespace fpm
 			return is;
 		}
 
+		// Collect the digits and let the exact conversion of `fpm::from_chars` convert them (no allocations)
+		detail::charconv::decimal digits;
+		digits.negative = negate;
+
 		char exponent_char = 'e';
-		int base = 10;
-
-		constexpr auto NoFraction = std::numeric_limits<std::size_t>::max();
-		std::size_t fraction_start = NoFraction;
-		std::vector<unsigned char> significand;
-
+		bool hex = false;
+		bool any_digit = false;
 		if(ch == '0')
 		{
 			ch = next();
@@ -638,52 +347,42 @@ namespace fpm
 			{
 				// Hexfloat
 				exponent_char = 'p';
-				base = 16;
+				hex = true;
 				ch = next();
 			}
 			else
 			{
-				significand.push_back(0);
+				any_digit = true; // a leading zero
 			}
 		}
+		const int base = hex ? 16 : 10;
+		const int digit_scale = hex ? 4 : 1;
 
 		// Parse the significand
 		thousands_separator_allowed = true;
+		bool seen_point = false;
 		for(;; ch = next())
 		{
 			if(ch == '.')
 			{
-				if(fraction_start != NoFraction)
+				if(seen_point)
 				{
 					// Double decimal point. Stop parsing.
 					break;
 				}
-				fraction_start = significand.size();
+				seen_point = true;
 				thousands_separator_allowed = false;
 			}
 			else
 			{
-				unsigned char val = base;
-				if(ch >= '0' && ch <= '9')
-				{
-					val = ch - '0';
-				}
-				else if(ch >= 'a' && ch <= 'f')
-				{
-					val = ch - 'a' + 10;
-				}
-				else if(ch >= 'A' && ch <= 'F')
-				{
-					val = ch - 'A' + 10;
-				}
-				if(val < 0 || val >= base)
-				{
+				const int value = detail::charconv::digit_value(ch, base);
+				if(value < 0)
 					break;
-				}
-				significand.push_back(val);
+				detail::charconv::add_digit(digits, value, seen_point, digit_scale);
+				any_digit = true;
 			}
 		}
-		if(significand.empty())
+		if(!any_digit)
 		{
 			// We need a significand
 			is.setstate(std::ios::failbit);
@@ -691,40 +390,23 @@ namespace fpm
 		}
 		thousands_separator_allowed = false;
 
-		if(fraction_start == NoFraction)
-		{
-			// If we haven't seen a fraction yet, place it at the end of the significand
-			fraction_start = significand.size();
-		}
-
 		// Parse the exponent
-		bool exponent_overflow = false;
-		std::size_t exponent = 0;
-		bool exponent_negate = false;
-		if(std::tolower(ch) == exponent_char)
+		if(std::tolower(static_cast<unsigned char>(ch)) == exponent_char)
 		{
 			ch = next();
-			if(ch == '-')
+			bool exponent_negate = false;
+			if(ch == '-' || ch == '+')
 			{
-				exponent_negate = true;
-				ch = next();
-			}
-			else if(ch == '+')
-			{
+				exponent_negate = ch == '-';
 				ch = next();
 			}
 
 			bool parsed = false;
-			while(std::isdigit(ch))
+			long long exponent = 0;
+			while(ch >= '0' && ch <= '9')
 			{
-				if(exponent <= std::numeric_limits<int>::max() / 10)
-				{
+				if(exponent < 1'000'000'000) // saturate: huge exponents give 0 or overflow either way
 					exponent = exponent * 10 + (ch - '0');
-				}
-				else
-				{
-					exponent_overflow = true;
-				}
 				parsed = true;
 				ch = next();
 			}
@@ -734,123 +416,23 @@ namespace fpm
 				is.setstate(std::ios::failbit);
 				return is;
 			}
+			digits.exponent += exponent_negate ? -exponent : exponent;
 		}
 
 		// We've parsed all we need. Construct the value.
-		if(exponent_overflow)
+		digits.trim();
+		const auto converted = hex
+			? detail::charconv::from_hex_digits<B, F, R>(digits)
+			: detail::charconv::from_decimal<B, F, R>(digits);
+		if(converted.out_of_range)
 		{
-			// Absolute exponent is too large
-			if(std::all_of(significand.begin(), significand.end(), [](unsigned char x){ return x == 0; }))
-			{
-				// Significand is zero. Exponent doesn't matter.
-				x = fixed<B, I, F, R>(0);
-			}
-			else if(exponent_negate)
-			{
-				// A huge negative exponent approaches 0.
-				x = fixed<B, I, F, R>::from_raw_value(0);
-			}
-			else
-			{
-				// A huge positive exponent approaches infinity.
-				x = std::numeric_limits<fixed<B, I, F, R>>::max();
-			}
-			return is;
-		}
-
-		// Shift the fraction offset according to exponent
-		{
-			const auto exponent_mult = (base == 10) ? 1: 4;
-			if(exponent_negate)
-			{
-				const auto adjust = std::min(exponent / exponent_mult, fraction_start);
-				fraction_start -= adjust;
-				exponent -= adjust * exponent_mult;
-			}
-			else
-			{
-				const auto adjust = std::min(exponent / exponent_mult, significand.size() - fraction_start);
-				fraction_start += adjust;
-				exponent -= adjust * exponent_mult;
-			}
-		}
-
-		constexpr auto IsSigned = std::is_signed<B>::value;
-		constexpr auto IntBits = sizeof(B) * 8 - F - (IsSigned ? 1 : 0);
-		constexpr auto MaxInt = (I{1} << IntBits) - 1;
-		constexpr auto MaxFraction = (I{1} << F) - 1;
-		constexpr auto MaxDivisor = std::numeric_limits<I>::max() >> (F + 1); ///< `fraction << F` must not overflow `I` (fraction < divisor)
-		constexpr auto MaxValue = (I{1} << sizeof(B) * 8) - 1;
-
-		// Parse the integer part
-		I integer = 0;
-		for(std::size_t i = 0; i < fraction_start; ++i)
-		{
-			if(integer > MaxInt / base)
-			{
-				// Overflow
-				x = negate ? std::numeric_limits<fixed<B, I, F, R>>::min() : std::numeric_limits<fixed<B, I, F, R>>::max();
-				return is;
-			}
-			assert(significand[i] < base);
-			integer = integer * base + significand[i];
-		}
-
-		// Parse the fractional part
-		I fraction = 0;
-		I divisor = 1;
-		for(std::size_t i = fraction_start; i < significand.size(); ++i)
-		{
-			assert(significand[i] < base);
-			if(divisor > MaxDivisor / base)
-			{
-				// We're done
-				break;
-			}
-			fraction = fraction * base + significand[i];
-			divisor *= base;
-		}
-
-		// Construct the value from the parsed parts
-		I raw_value = (integer << F) + ((fraction << F) + (R ? divisor / 2 : 0)) / divisor;
-
-		// Apply remaining exponent
-		if(exponent_char == 'p')
-		{
-			// Base-2 exponent
-			if(exponent_negate)
-				raw_value >>= exponent;
-			else
-				raw_value <<= exponent;
+			// Too large: saturate
+			x = negate ? std::numeric_limits<fixed<B, I, F, R>>::lowest() : std::numeric_limits<fixed<B, I, F, R>>::max();
 		}
 		else
 		{
-			// Base-10 exponent
-			if(exponent_negate)
-			{
-				I remainder = 0;
-				for(std::size_t e = 0; e < exponent; ++e)
-				{
-					remainder = raw_value % 10;
-					raw_value /= 10;
-				}
-				raw_value += remainder / 5;
-			}
-			else
-			{
-				for(std::size_t e = 0; e < exponent; ++e)
-				{
-					if(raw_value > MaxValue / 10)
-					{
-						// Overflow
-						x = negate ? std::numeric_limits<fixed<B, I, F, R>>::min() : std::numeric_limits<fixed<B, I, F, R>>::max();
-						return is;
-					}
-					raw_value *= 10;
-				}
-			}
+			x = fixed<B, I, F, R>::from_raw_value(detail::charconv::to_raw<B>(converted.magnitude, negate));
 		}
-		x = fixed<B, I, F, R>::from_raw_value(static_cast<B>(negate ? -raw_value : raw_value));
 		return is;
 	}
 
@@ -858,350 +440,307 @@ namespace fpm
 
 namespace std
 {
+	/// `std::format` support, like for floating-point types: fill and align, sign, '#', '0', width and precision
+	/// (also as nested arguments, e.g. "{:{}.{}f}"), and the types 'a', 'A', 'e', 'E', 'f', 'F', 'g' and 'G'.
+	/// Locale-specific formatting ('L') is not supported.
+	///
+	/// Like for floating-point types, the output is locale-independent and based on `to_chars`:
+	/// without type and precision it is the shortest representation that reads back to the same value.
 	template<typename CharT, typename B, typename I, uint32_t F, bool R>
 	struct formatter<fpm::fixed<B, I, F, R>, CharT>
 	{
 		static_assert(
-			// You can add `char32_t` but it is not tested.
-			// `char8_t` and `char16_t` are variable-width and therefore not supported.
-			// std::format is implemented only for `char` and `wchar_t` anyway
-			std::is_same<CharT, char>::value || std::is_same<CharT, wchar_t>::value,
-			"Formatter is implemented only for fixed-width encodings"
+			// `std::format` is implemented only for `char` and `wchar_t`
+			std::is_same_v<CharT, char> || std::is_same_v<CharT, wchar_t>,
+			"Formatter is implemented only for `char` and `wchar_t`"
 		);
 
-		/// Any character used for padding
-		char paddingChar = ' ';
+	private:
 		enum class Alignment : char
 		{
-			Left = '<', ///< align left = padding on right
-			Right = '>', ///< align right = padding on left
-			Center = '^', ///< align center = padding on both sides, more on left
+			Default = '\0', ///< right-aligned for numbers
+			Left = '<',
+			Right = '>',
+			Center = '^', ///< padding on both sides, more on the right
 		};
-		Alignment alignmentChar = Alignment::Right;
 
-		enum class SignControl : char
+		enum class Sign : char
 		{
-			PositiveSign = '+', ///< Always show sign, '-' or '+'
-			PositiveSpace = ' ', ///< Always show sign, '-' or ' '
-			NegativeOnly = '-' ///< Show only negative sign
+			Minus = '-', ///< only show the sign of negative numbers
+			Plus = '+',  ///< always show the sign
+			Space = ' ', ///< space for non-negative numbers
 		};
-		SignControl signControl = SignControl::NegativeOnly;
 
-		/// Alternate Form.
-		/// Always contain decimal point (even if there is no digit behind it).
-		/// Special behaviour for 'g' and 'G' types.
-		bool hashOption = false;
-		/// Zero-padding between sign and numbers.
-		/// No effect for non-default alignment
-		bool zeroOption = false;
-
-		std::size_t width = 0;
-		/// -1 means unchanged (this value cannot be set by the user as negative values are not possible)
-		std::size_t precision = -1;
-
-		enum class FormatType : char
+		/// Width or precision: a value, or a (nested) argument index
+		struct Spec
 		{
-			Default = '\0',
-
-			Hex = 'a',
-			Hex_Upper = 'A',
-
-			Scientific = 'e',
-			Scientific_Upper = 'E',
-
-			Fixed = 'f',
-			Fixed_Upper = 'F', ///< Same behaviour as Fixed
-
-			General = 'g',
-			General_Upper = 'G',
+			std::size_t value = 0;
+			std::size_t arg_id = 0;
+			bool is_set = false;
+			bool is_arg = false;
 		};
-		FormatType type = FormatType::Default;
 
-		template<class ParseContext = std::format_context>
-		constexpr typename ParseContext::iterator parse(ParseContext& ctx)
+		/// The fill character: a single code point, which may take several code units in UTF-8
+		std::array<CharT, 4> fill{static_cast<CharT>(' ')};
+		std::size_t fill_length = 1;
+		Alignment alignment = Alignment::Default;
+		Sign sign = Sign::Minus;
+		bool alternate = false;   ///< '#'
+		bool zero_padding = false; ///< '0'
+		Spec width;
+		Spec precision;
+		char type = '\0';
+
+		static constexpr bool is_alignment(const CharT c) noexcept
 		{
-			auto it = ctx.begin();
+			return c == CharT('<') || c == CharT('>') || c == CharT('^');
+		}
 
-			// Alignment, (+padding)
-			if(it != ctx.end())
+		/// Number of code units of the code point starting with `c`
+		static constexpr std::size_t code_point_length(const CharT c) noexcept
+		{
+			if constexpr(sizeof(CharT) == 1)
 			{
-				bool used = false;
-
-				const auto c = *it;
-				if(it + 1 != ctx.end())
-				{
-					const auto c1 = *(it + 1);
-					if(
-						c1 == static_cast<char>(Alignment::Left)
-						|| c1 == static_cast<char>(Alignment::Right)
-						|| c1 == static_cast<char>(Alignment::Center)
-					)
-					{
-						paddingChar = c;
-						alignmentChar = static_cast<Alignment>(c1);
-						++it;
-						++it;
-						used = true;
-					}
-				}
-				if(
-					!used
-					&& (
-						c == static_cast<char>(Alignment::Left)
-						|| c == static_cast<char>(Alignment::Right)
-						|| c == static_cast<char>(Alignment::Center)
-					)
-				)
-				{
-					alignmentChar = static_cast<Alignment>(c);
-					++it;
-				}
+				const auto u = static_cast<unsigned char>(c);
+				return (u >= 0xF0) ? 4 : (u >= 0xE0) ? 3 : (u >= 0xC0) ? 2 : 1;
 			}
-
-			// Sign Control
-			if(it != ctx.end())
+			else
 			{
-				const auto c = *it;
-				if(
-					c == static_cast<char>(SignControl::PositiveSign)
-					|| c == static_cast<char>(SignControl::PositiveSpace)
-					|| c == static_cast<char>(SignControl::NegativeOnly)
-				)
-				{
-					signControl = static_cast<SignControl>(c);
-					++it;
-				}
+				return 1;
 			}
+		}
 
-			// Alternate form
-			if(it != ctx.end() && *it == '#')
+		template<typename ParseContext>
+		static constexpr typename ParseContext::iterator parse_spec(typename ParseContext::iterator it, ParseContext& ctx, Spec& spec)
+		{
+			const auto end = ctx.end();
+			if(it != end && *it == CharT('{'))
 			{
-				hashOption = true;
+				// Nested argument: "{}" or "{n}"
 				++it;
-			}
-
-			// Zero padding
-			if(it != ctx.end() && *it == '0')
-			{
-				zeroOption = true;
-				++it;
-			}
-
-			// Width
-			while(it != ctx.end())
-			{
-				const auto c = *it;
-				if(c >= '0' && c <= '9')
+				if(it != end && *it >= CharT('0') && *it <= CharT('9'))
 				{
-					width = width * 10 + (c - '0');
-					++it;
-					continue;
+					std::size_t id = 0;
+					while(it != end && *it >= CharT('0') && *it <= CharT('9'))
+						id = id * 10 + static_cast<std::size_t>(*it++ - CharT('0'));
+					ctx.check_arg_id(id);
+					spec.arg_id = id;
 				}
-				if(c == '{')
+				else
 				{
-					throw std::invalid_argument("Nested width is not supported");
+					spec.arg_id = ctx.next_arg_id();
 				}
-
-				break;
+				if(it == end || *it != CharT('}'))
+					throw std::format_error("Invalid nested width or precision");
+#if defined(__cpp_lib_format) && __cpp_lib_format >= 202305L
+				ctx.check_dynamic_spec_integral(spec.arg_id); // compile-time check of the argument type
+#endif
+				spec.is_arg = true;
+				spec.is_set = true;
+				return ++it;
 			}
 
-			// Precision
-			if(it != ctx.end() && *it == '.')
+			if(it != end && *it >= CharT('0') && *it <= CharT('9'))
 			{
-				++it;
-				precision = 0;
-				if(it != ctx.end())
-				{
-					if(*it == '{')
-					{
-						throw std::invalid_argument("Nested precision is not supported");
-					}
-					else while(it != ctx.end())
-					{
-						const auto c = *it;
-						if(c >= '0' && c <= '9')
-						{
-							precision = precision * 10 + (c - '0');
-							++it;
-							continue;
-						}
-						break;
-					}
-				}
-			}
-
-			// No locale-specific behaviour
-
-			// type
-			if(it != ctx.end())
-			{
-				switch(static_cast<FormatType>(*it))
-				{
-					case FormatType::Default:
-					case FormatType::Hex:
-					case FormatType::Hex_Upper:
-					case FormatType::Scientific:
-					case FormatType::Scientific_Upper:
-					case FormatType::Fixed:
-					case FormatType::Fixed_Upper:
-					case FormatType::General:
-					case FormatType::General_Upper:
-					{
-						type = static_cast<FormatType>(*it);
-						++it;
-						break;
-					}
-					default:
-						break;
-				}
-			}
-
-			if(it != ctx.end() && *it != '}')
-			{
-				throw std::format_error("Invalid format - unexpected character '" + std::string(1, *it) + "'");
+				spec.value = 0;
+				while(it != end && *it >= CharT('0') && *it <= CharT('9'))
+					spec.value = spec.value * 10 + static_cast<std::size_t>(*it++ - CharT('0'));
+				spec.is_set = true;
 			}
 			return it;
 		}
 
-		template<typename FormatContext = std::format_context>
+		template<typename FormatContext>
+		static std::size_t resolve(const Spec& spec, FormatContext& ctx)
+		{
+			if(!spec.is_arg)
+				return spec.value;
+
+			const auto get = [](const auto value) -> std::size_t
+			{
+				using T = std::remove_cvref_t<decltype(value)>;
+				if constexpr(std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, CharT>)
+				{
+					if(value < 0)
+						throw std::format_error("Negative width or precision");
+					return static_cast<std::size_t>(value);
+				}
+				else
+				{
+					throw std::format_error("Width or precision is not an integer");
+				}
+			};
+			const auto arg = ctx.arg(spec.arg_id);
+			if constexpr(requires { arg.visit(get); })
+				return arg.visit(get); // C++26 (std::visit_format_arg is deprecated)
+			else
+				return std::visit_format_arg(get, arg);
+		}
+
+	public:
+		template<typename ParseContext>
+		constexpr typename ParseContext::iterator parse(ParseContext& ctx)
+		{
+			auto it = ctx.begin();
+			const auto end = ctx.end();
+
+			// Fill and align
+			if(it != end && *it != CharT('}'))
+			{
+				const auto length = code_point_length(*it);
+				auto next = it;
+				for(std::size_t i = 0; i < length && next != end; ++i)
+					++next;
+				if(next != end && is_alignment(*next) && *it != CharT('{') && *it != CharT('}'))
+				{
+					fill_length = length;
+					for(std::size_t i = 0; i < length; ++i)
+						fill[i] = *it++;
+					alignment = static_cast<Alignment>(*it++);
+				}
+				else if(is_alignment(*it))
+				{
+					alignment = static_cast<Alignment>(*it++);
+				}
+			}
+
+			// Sign
+			if(it != end && (*it == CharT('+') || *it == CharT('-') || *it == CharT(' ')))
+				sign = static_cast<Sign>(*it++);
+
+			// Alternate form
+			if(it != end && *it == CharT('#'))
+			{
+				alternate = true;
+				++it;
+			}
+
+			// Zero padding
+			if(it != end && *it == CharT('0'))
+			{
+				zero_padding = true;
+				++it;
+			}
+
+			it = parse_spec(it, ctx, width);
+			if(width.is_set && !width.is_arg && width.value == 0)
+				throw std::format_error("Width must be positive");
+
+			// Precision
+			if(it != end && *it == CharT('.'))
+			{
+				++it;
+				if(it == end || !((*it >= CharT('0') && *it <= CharT('9')) || *it == CharT('{')))
+					throw std::format_error("Missing precision");
+				it = parse_spec(it, ctx, precision);
+			}
+
+			if(it != end && *it == CharT('L'))
+				throw std::format_error("Locale-specific formatting of fixed-point numbers is not supported");
+
+			// Type
+			if(it != end)
+			{
+				switch(*it)
+				{
+					case CharT('a'): case CharT('A'):
+					case CharT('e'): case CharT('E'):
+					case CharT('f'): case CharT('F'):
+					case CharT('g'): case CharT('G'):
+						type = static_cast<char>(*it++);
+						break;
+					default:
+						break;
+				}
+			}
+
+			if(it != end && *it != CharT('}'))
+				throw std::format_error("Invalid format specification for a fixed-point number");
+			return it;
+		}
+
+		template<typename FormatContext>
 		typename FormatContext::iterator format(const fpm::fixed<B, I, F, R>& value, FormatContext& ctx) const
 		{
-			std::basic_ostringstream<CharT> out;
-			if(signControl != SignControl::NegativeOnly && value >= decltype(value){0})
+			const std::size_t w = resolve(width, ctx);
+			const bool has_precision = precision.is_set;
+			const int p = has_precision ? static_cast<int>(std::min<std::size_t>(resolve(precision, ctx), 1'000'000)) : -1;
+
+			// Convert, with room for a sign, a large precision and '#' additions
+			const auto lower = static_cast<char>(type | 0x20);
+			std::string text(static_cast<std::size_t>(std::max(p, 0)) + 160, '\0');
+			std::to_chars_result result;
+			char* const first = text.data();
+			char* const last = first + text.size();
+			switch(lower)
 			{
-				if(signControl == SignControl::PositiveSign)
-					out << '+';
-				else if(signControl == SignControl::PositiveSpace)
-					out << ' ';
-				else
-					throw std::format_error("Invalid sign behaviour");
+				case 'a': result = fpm::to_chars(first, last, value, std::chars_format::hex, p); break;
+				case 'e': result = fpm::to_chars(first, last, value, std::chars_format::scientific, has_precision ? p : 6); break;
+				case 'f': result = fpm::to_chars(first, last, value, std::chars_format::fixed, has_precision ? p : 6); break;
+				case 'g': result = fpm::to_chars(first, last, value, std::chars_format::general, has_precision ? p : 6); break;
+				default:
+					result = has_precision
+						? fpm::to_chars(first, last, value, std::chars_format::general, p)
+						: fpm::to_chars(first, last, value);
+					break;
 			}
-			if(precision != static_cast<std::size_t>(-1))
-				out << std::setprecision(precision);
-			if(type != FormatType::Default)
+			if(result.ec != std::errc{})
+				throw std::format_error("Fixed-point value could not be formatted");
+			text.resize(static_cast<std::size_t>(result.ptr - first));
+
+			if(alternate)
+				fpm::detail::apply_alternate_form(text, lower == '\0' ? (has_precision ? '\0' : 'x') : lower, p);
+
+			if(type == 'A' || type == 'E' || type == 'G' || type == 'F')
 			{
-				// Format type itself
-				switch(type)
-				{
-					default:
-					case FormatType::Default:
-						break;
-					case FormatType::Hex:
-					case FormatType::Hex_Upper:
-						out << std::hexfloat;
-						break;
-					case FormatType::Scientific:
-					case FormatType::Scientific_Upper:
-						out << std::scientific;
-						break;
-					case FormatType::Fixed:
-					case FormatType::Fixed_Upper:
-						out << std::fixed;
-						break;
-					case FormatType::General:
-					case FormatType::General_Upper:
-						break;
-				}
-				// Upper-case versions
-				switch(type)
-				{
-					default:
-						break;
-					case FormatType::Hex_Upper:
-					case FormatType::Scientific_Upper:
-					case FormatType::Fixed_Upper:
-					case FormatType::General_Upper:
-						out << std::uppercase;
-						break;
-				}
-			}
-			if(type == FormatType::Default && precision == static_cast<std::size_t>(-1))
-			{
-				// Like floating-point types: without type and precision, use the shortest round-trip representation
-				std::array<char, 128> buffer{};
-				const auto result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-				for(const char* c = buffer.data(); c != result.ptr; ++c)
-					out << static_cast<CharT>(*c);
-			}
-			else
-			{
-				out << value;
+				for(auto& c : text)
+					if(c >= 'a' && c <= 'z')
+						c = static_cast<char>(c - 'a' + 'A');
 			}
 
-			// Padding
-			if(out.tellp() < width)
+			// Sign
+			const bool negative = !text.empty() && text[0] == '-';
+			const std::size_t sign_length = (negative || sign != Sign::Minus) ? 1 : 0;
+			const char sign_char = negative ? '-' : static_cast<char>(sign);
+			const std::string_view digits = std::string_view(text).substr(negative ? 1 : 0);
+			const std::size_t content = sign_length + digits.size();
+
+			auto out = ctx.out();
+			const auto put = [&](const std::string_view str)
 			{
-				if(alignmentChar == Alignment::Left)
-				{
-					while(out.tellp() < width)
-						out << paddingChar;
-				}
-				else if(alignmentChar == Alignment::Right)
-				{
-					if(zeroOption)
-					{
-						const auto str = out.str();
-						out.clear();
-						out.seekp(0, std::ios::beg);
+				for(const char c : str)
+					*out++ = static_cast<CharT>(c);
+			};
+			const auto put_fill = [&](std::size_t count)
+			{
+				for(; count > 0; --count)
+					for(std::size_t i = 0; i < fill_length; ++i)
+						*out++ = fill[i];
+			};
 
-						const bool hasSign = !str.empty() && (str[0] == '+' || str[0] == '-');
-						if(hasSign)
-							out << str[0];
-
-						// Zero-padding between sign character and the true value
-						while(out.tellp() < width - str.size() + (hasSign ? 1 : 0))
-							out << '0';
-
-						// Value without sign
-						if(hasSign)
-							out << std::basic_string_view<CharT>(str.data()).substr(1);
-						else
-							out << str;
-					}
-					else
-					{
-						const auto str = out.str();
-						out.clear();
-						out.seekp(0, std::ios::beg);
-
-						while(out.tellp() < width - str.size())
-							out << paddingChar;
-						out << str;
-					}
-				}
-				else if(alignmentChar == Alignment::Center)
-				{
-					const auto str = out.str();
-					out.clear();
-					out.seekp(0, std::ios::beg);
-
-					if(str.length() < width)
-					{
-						const auto padding = width - str.length();
-						const auto halfPadding = padding / 2;
-
-						for(std::size_t i = 0; i < halfPadding; ++i) // Padding before the value
-							out << paddingChar;
-
-						out << str;
-
-						for(std::size_t i = 0; i < halfPadding; ++i) // Padding after the value
-							out << paddingChar;
-						if(halfPadding + halfPadding < padding) // This is the longer one (for odd numbers)
-							out << paddingChar;
-					}
-				}
-				else
-					throw std::runtime_error("Unknown alignment character");
+			const std::size_t padding = (w > content) ? w - content : 0;
+			if(alignment == Alignment::Default && zero_padding)
+			{
+				// Zeros between the sign and the digits
+				if(sign_length != 0)
+					*out++ = static_cast<CharT>(sign_char);
+				for(std::size_t i = 0; i < padding; ++i)
+					*out++ = static_cast<CharT>('0');
+				put(digits);
+				return out;
 			}
 
-			// Copy to output
-			{
-				const auto str = out.str();
-				std::copy(str.begin(), str.end(), ctx.out());
-				return ctx.out();
-			}
+			std::size_t before = padding;
+			if(alignment == Alignment::Left)
+				before = 0;
+			else if(alignment == Alignment::Center)
+				before = padding / 2;
+			put_fill(before);
+			if(sign_length != 0)
+				*out++ = static_cast<CharT>(sign_char);
+			put(digits);
+			put_fill(padding - before);
+			return out;
 		}
 	};
-
 }

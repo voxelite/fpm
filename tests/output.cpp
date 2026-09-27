@@ -4,6 +4,7 @@
 #include <tuple>
 #include <utility>
 #include <cfenv>
+#include <random>
 
 using ::testing::Combine;
 using ::testing::Values;
@@ -347,4 +348,54 @@ TEST_F(output_specific, type_limit)
 	test("-8.000e+00", F4::from_raw_value(-127 - 1), 3, std::ios::scientific);
 	test("7.938", F4::from_raw_value(127), 3, std::ios::fixed);
 	test("7.938e+00", F4::from_raw_value(127), 3, std::ios::scientific);
+}
+
+TEST(output_types, matches_double)
+{
+	// Exactly representable values print like a double, for many types (including 64-bit ones)
+	const auto check = []<typename P>(P)
+	{
+		std::mt19937_64 rng(7);
+		for(int i = 0; i < 300; ++i)
+		{
+			using B = typename P::base_type;
+			// At most 53 significant bits, so the value is exact as a double
+			const int bits = 1 + static_cast<int>(rng() % std::min(53, std::numeric_limits<B>::digits));
+			auto raw = static_cast<B>(rng() >> (64 - bits));
+			if(rng() % 2)
+				raw = static_cast<B>(-raw);
+			const auto x = P::from_raw_value(raw);
+			for(const auto flags : {std::ios::fmtflags{}, std::ios::fmtflags{std::ios::fixed}, std::ios::fmtflags{std::ios::scientific}})
+			{
+				for(const int precision : {0, 3, 6, 17, 25})
+				{
+					std::stringstream ss_fixed, ss_double;
+					ss_fixed.setf(flags, std::ios::floatfield);
+					ss_double.setf(flags, std::ios::floatfield);
+					ss_fixed << std::setprecision(precision) << x;
+					ss_double << std::setprecision(precision) << static_cast<double>(x);
+					ASSERT_EQ(ss_double.str(), ss_fixed.str()) << "raw " << static_cast<long long>(raw);
+				}
+			}
+		}
+	};
+	check(fpm::fixed_8_8{});
+	check(fpm::fixed_24_8{});
+	check(fpm::fixed_8_24{});
+#ifdef FPM_INT128
+	check(fpm::fixed_32_32{});
+	check(fpm::fixed_48_16{});
+	check(fpm::fixed_16_48{});
+	check(fpm::fixed_8_56{});
+#endif
+}
+
+TEST(output_types, failed_stream_writes_nothing)
+{
+	// operator<< is a formatted output function: it does nothing when the stream is not good
+	std::stringstream ss;
+	ss.setstate(std::ios::failbit);
+	ss << fpm::fixed_16_16(1.5);
+	ss.clear();
+	EXPECT_EQ("", ss.str());
 }

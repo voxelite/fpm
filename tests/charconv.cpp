@@ -74,6 +74,7 @@ namespace
 		return values;
 	}
 
+#ifdef __SIZEOF_INT128__
 	/// Exact expected raw value of M * 10^E for a fixed-point type, or `nullopt` if out of range.
 	/// Uses 128-bit arithmetic, so M must be < 10^12 and E in [-25, 6].
 	template<typename P>
@@ -111,6 +112,7 @@ namespace
 		const auto m = static_cast<unsigned long long>(mag);
 		return static_cast<long long>(negative ? 0 - m : m);
 	}
+#endif
 }
 
 template<typename T>
@@ -234,6 +236,7 @@ TYPED_TEST(charconv, shortest_is_minimal)
 	}
 }
 
+#ifdef __SIZEOF_INT128__
 TYPED_TEST(charconv, from_chars_is_exact)
 {
 	using P = TypeParam;
@@ -271,11 +274,14 @@ TYPED_TEST(charconv, from_chars_is_exact)
 		}
 	}
 }
+#endif
 
 TEST(charconv, shortest_format_selection)
 {
 	using P = fpm::fixed_16_16;
+#ifdef FPM_INT128
 	using L = fpm::fixed_48_16;
+#endif
 	using S = fpm::fixed_8_24;
 
 	// Plain: the shorter of fixed and scientific, fixed on ties (like double)
@@ -283,8 +289,12 @@ TEST(charconv, shortest_format_selection)
 	EXPECT_EQ("1", to_chars_string(P(1)));
 	EXPECT_EQ("-1.5", to_chars_string(P(-1.5)));
 	EXPECT_EQ("30000", to_chars_string(P(30000)));
+#ifdef FPM_INT128
 	EXPECT_EQ("1e+05", to_chars_string(L(100000)));
+#endif
+#ifdef FPM_INT128
 	EXPECT_EQ("123456", to_chars_string(L(123456)));
+#endif
 	EXPECT_EQ("1e-04", to_chars_string(S(0.0001)));
 	EXPECT_EQ("0.00012", to_chars_string(S(0.00012)));
 
@@ -297,13 +307,19 @@ TEST(charconv, shortest_format_selection)
 	EXPECT_EQ("2e-05", to_chars_string(std::numeric_limits<P>::epsilon()));
 
 	// General: fixed if the exponent is in [-4, 6), like double
+#ifdef FPM_INT128
 	EXPECT_EQ("100000", to_chars_string(L(100000), std::chars_format::general));
+#endif
+#ifdef FPM_INT128
 	EXPECT_EQ("1e+06", to_chars_string(L(1000000), std::chars_format::general));
+#endif
 	EXPECT_EQ("0.0001", to_chars_string(S(0.0001), std::chars_format::general));
 	EXPECT_EQ("1e-05", to_chars_string(S(0.00001), std::chars_format::general));
 	EXPECT_EQ("0", to_chars_string(P(0), std::chars_format::general));
 
+#ifdef FPM_INT128
 	EXPECT_EQ("100000", to_chars_string(L(100000), std::chars_format::fixed));
+#endif
 	EXPECT_EQ("0.1", to_chars_string(P(0.1), std::chars_format::fixed));
 	EXPECT_EQ("1e-01", to_chars_string(P(0.1), std::chars_format::scientific));
 	EXPECT_EQ("0e+00", to_chars_string(P(0), std::chars_format::scientific));
@@ -503,7 +519,9 @@ TEST(charconv, to_string)
 	EXPECT_EQ("0", fpm::to_string(P(0)));
 	EXPECT_EQ("123.0625", fpm::to_string(P(123.0625)));
 	EXPECT_EQ("-0.1", fpm::to_string(P(-0.1)));
+#ifdef FPM_INT128
 	EXPECT_EQ("1e+05", fpm::to_string(fpm::fixed_48_16(100000)));
+#endif
 
 	// C++26 defines `std::to_string(floating-point)` as `std::format("{}", value)`
 	for(const auto value : sample_values<P>(500))
