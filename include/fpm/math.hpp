@@ -12,14 +12,6 @@
 
 #include "fixed.hpp"
 
-// Code-layout hints for GCC, from measurements: some small functions give GCC better code in their callers
-// when they are not inlined. This never changes results (all compilers compute exactly the same values).
-#if defined(__GNUC__) && !defined(__clang__)
-	#define FPM_DETAIL_GCC_NOINLINE [[gnu::noinline]]
-#else
-	#define FPM_DETAIL_GCC_NOINLINE
-#endif
-
 namespace fpm
 {
 	#pragma region Helper functions
@@ -924,7 +916,7 @@ namespace fpm
 
 		/// Calculates atan(x) assuming that x is in the range [0,1].
 		template<typename B, typename I, uint32_t F, bool R>
-		[[nodiscard]] FPM_DETAIL_GCC_NOINLINE inline constexpr fixed<B, I, F, R> atan_sanitized(fixed<B, I, F, R> x) noexcept
+		[[nodiscard]] inline constexpr fixed<B, I, F, R> atan_sanitized(fixed<B, I, F, R> x) noexcept
 		{
 			using Fixed = fixed<B, I, F, R>;
 			assert(x >= Fixed(0) && x <= Fixed(1));
