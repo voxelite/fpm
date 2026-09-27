@@ -103,6 +103,25 @@ Reading fixed point numbers works similarly, by streaming `fpm::fixed` types fro
 
 `fpm`'s implementation of the streaming operators emulates streaming native floats as closely as possible without using floating-point types.
 
+### Character conversions
+The `<fpm/charconv.hpp>` header (also included by `<fpm/ios.hpp>`) provides `fpm::to_chars`, `fpm::from_chars` and `fpm::to_string`,
+which behave like their standard counterparts for `double`. They are locale-independent, exact, use only integer arithmetic and are `constexpr`:
+```c++
+#include <fpm/charconv.hpp>
+
+constexpr auto x = fpm::fixed_16_16(0.1);
+static_assert(fpm::to_string(x) == "0.1");                   // shortest representation that reads back as `x`
+
+char buffer[32];
+auto [end, ec] = fpm::to_chars(buffer, buffer + 32, x, std::chars_format::fixed, 8); // "0.10000610": exact digits
+fpm::fixed_16_16 y;
+if(auto result = fpm::from_chars(buffer, end, y)) { /* y == x */ }
+```
+* Without a precision, `to_chars` and `to_string` produce the shortest text that `from_chars` converts back to the same value, like C++26 `std::to_string` and `std::format("{}", value)`.
+* With a precision, `to_chars` behaves like `printf` with `%f`, `%e`, `%g` or `%a` (without `0x`), rounding exactly with ties to even.
+* `from_chars` rounds exactly to the nearest value (ties to even), or truncates for types without rounding. Values out of range, as well as infinity and NaN, give `std::errc::result_out_of_range` and leave the value unmodified.
+* Overloads in namespace `std` are provided for backward compatibility, but prefer the `fpm::` versions (also found by argument-dependent lookup).
+
 ## Common constants
 The following static member functions in the `fpm::fixed` class provide common mathematical constants in the fixed type:
 * `e()`: _e_, roughly equal to 2.71828183.

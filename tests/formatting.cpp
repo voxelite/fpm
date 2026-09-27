@@ -44,8 +44,8 @@ TEST(formatting, basic)
 	EXPECT_EQ(std::format("{}",   fpm::fixed_16_16{123.125}), std::string("123.125"));
 	EXPECT_EQ(std::format("{:+}", fpm::fixed_16_16{123.125}), std::string("+123.125"));
 
-	EXPECT_EQ(std::format("{}",   fpm::fixed_16_16{123.0625}), std::string("123.062"));
-	EXPECT_EQ(std::format("{:+}", fpm::fixed_16_16{123.0625}), std::string("+123.062"));
+	EXPECT_EQ(std::format("{}",   fpm::fixed_16_16{123.0625}), std::string("123.0625"));
+	EXPECT_EQ(std::format("{:+}", fpm::fixed_16_16{123.0625}), std::string("+123.0625"));
 }
 
 TEST(formatting, width)

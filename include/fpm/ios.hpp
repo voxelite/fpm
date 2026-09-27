@@ -13,6 +13,7 @@
 #include <string_view>
 #include <iomanip>
 
+#include "charconv.hpp"
 #include "fixed.hpp"
 #include "math.hpp"
 
@@ -853,13 +854,6 @@ namespace fpm
 		return is;
 	}
 
-	template<typename BaseType, typename IntermediateType, uint32_t FractionBits, bool EnableRounding>
-	inline std::string to_string(const fpm::fixed<BaseType, IntermediateType, FractionBits, EnableRounding>& value)
-	{
-		std::stringstream ss;
-		ss << value;
-		return ss.str();
-	}
 }
 
 namespace std
@@ -1121,7 +1115,18 @@ namespace std
 						break;
 				}
 			}
-			out << value;
+			if(type == FormatType::Default && precision == static_cast<std::size_t>(-1))
+			{
+				// Like floating-point types: without type and precision, use the shortest round-trip representation
+				std::array<char, 128> buffer{};
+				const auto result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+				for(const char* c = buffer.data(); c != result.ptr; ++c)
+					out << static_cast<CharT>(*c);
+			}
+			else
+			{
+				out << value;
+			}
 
 			// Padding
 			if(out.tellp() < width)
@@ -1199,119 +1204,4 @@ namespace std
 		}
 	};
 
-#pragma region from_chars
-	// https://en.cppreference.com/w/cpp/utility/from_chars
-	template<typename BaseType, typename IntermediateType, uint32_t FractionBits, bool EnableRounding>
-	inline std::from_chars_result from_chars(
-		const char* first,
-		const char* last,
-		fpm::fixed<BaseType, IntermediateType, FractionBits, EnableRounding>& value,
-		std::chars_format fmt = std::chars_format::general
-	)
-	{
-		std::string buff(first, last); //TODO optimize using `max_digit10`
-		std::stringstream ss(buff);
-		if((fmt & std::chars_format::hex) != std::chars_format{})
-			ss.flags(ss.flags() | std::ios_base::hex);
-		if((fmt & std::chars_format::fixed) != std::chars_format{})
-			ss.flags(ss.flags() | std::ios_base::fixed);
-		if((fmt & std::chars_format::scientific) != std::chars_format{})
-			ss.flags(ss.flags() | std::ios_base::scientific);
-
-		decltype(value) copy{};
-		ss >> copy;
-		if(ss)
-		{
-			if(ss.tellg() == 0)
-			{
-				return std::from_chars_result{
-					.ptr = first,
-					.ec = std::errc::invalid_argument
-				};
-			}
-			else
-			{
-				value = copy;
-				return std::from_chars_result{
-					.ptr = first + ss.tellg()
-				};
-			}
-		}
-		else
-		{
-			return std::from_chars_result{
-				.ptr = last,
-				.ec = std::errc::result_out_of_range
-			};
-		}
-	}
-#pragma endregion
-
-#pragma region to_chars
-	// https://en.cppreference.com/w/cpp/utility/to_chars
-	template<typename BaseType, typename IntermediateType, uint32_t FractionBits, bool EnableRounding>
-	inline std::to_chars_result to_chars(
-		char* first,
-		char* last,
-		const fpm::fixed<BaseType, IntermediateType, FractionBits, EnableRounding> value,
-		const std::chars_format fmt,
-		const int precision
-	)
-	{
-		std::stringstream ss;
-		if((fmt & std::chars_format::hex) != std::chars_format{})
-			ss.flags(ss.flags() | std::ios_base::hex);
-		ss.precision(precision);
-		if((fmt & std::chars_format::fixed) != std::chars_format{})
-			ss.flags(ss.flags() | std::ios_base::fixed);
-		if((fmt & std::chars_format::scientific) != std::chars_format{})
-			ss.flags(ss.flags() | std::ios_base::scientific);
-
-		ss << value;
-
-		const auto ss_str = ss.str();
-		if(ss_str.size() > last - first)
-		{
-			return std::to_chars_result{
-				.ptr = last,
-				.ec = std::errc::value_too_large
-			};
-		}
-
-		last = std::copy_n(ss_str.data(), ss_str.size(), first);
-		return std::to_chars_result{
-			.ptr = last
-		};
-	}
-	template<typename BaseType, typename IntermediateType, uint32_t FractionBits, bool EnableRounding>
-	inline std::to_chars_result to_chars(
-		char* first,
-		char* last,
-		const fpm::fixed<BaseType, IntermediateType, FractionBits, EnableRounding> value,
-		const std::chars_format fmt
-	)
-	{
-		return to_chars(
-			first,
-			last,
-			value,
-			fmt,
-			6
-		);
-	}
-	template<typename BaseType, typename IntermediateType, uint32_t FractionBits, bool EnableRounding>
-	inline std::to_chars_result to_chars(
-		char* first,
-		char* last,
-		const fpm::fixed<BaseType, IntermediateType, FractionBits, EnableRounding> value
-	)
-	{
-		return to_chars(
-			first,
-			last,
-			value,
-			std::chars_format::general
-		);
-	}
-#pragma endregion
 }

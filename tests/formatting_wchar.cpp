@@ -44,8 +44,8 @@ TEST(formatting_wchar, basic)
 	EXPECT_EQ(std::format(L"{}",   fpm::fixed_16_16{123.125}), std::wstring(L"123.125"));
 	EXPECT_EQ(std::format(L"{:+}", fpm::fixed_16_16{123.125}), std::wstring(L"+123.125"));
 
-	EXPECT_EQ(std::format(L"{}",   fpm::fixed_16_16{123.0625}), std::wstring(L"123.062"));
-	EXPECT_EQ(std::format(L"{:+}", fpm::fixed_16_16{123.0625}), std::wstring(L"+123.062"));
+	EXPECT_EQ(std::format(L"{}",   fpm::fixed_16_16{123.0625}), std::wstring(L"123.0625"));
+	EXPECT_EQ(std::format(L"{:+}", fpm::fixed_16_16{123.0625}), std::wstring(L"+123.0625"));
 }
 
 TEST(formatting_wchar, width)

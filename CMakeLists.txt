@@ -15,6 +15,7 @@ target_compile_features(fpm INTERFACE cxx_std_26)
 target_include_directories(fpm INTERFACE include)
 
 install(FILES
+  include/fpm/charconv.hpp
   include/fpm/fixed.hpp
   include/fpm/ios.hpp
   include/fpm/math.hpp
@@ -43,6 +44,7 @@ if(BUILD_TESTS)
     tests/arithmetic.cpp
     tests/arithmetic_int.cpp
     tests/basic_math.cpp
+    tests/charconv.cpp
     tests/constexpr.cpp
     tests/constants.cpp
     tests/conversion.cpp
