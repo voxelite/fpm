@@ -150,7 +150,7 @@ The following static member functions in the `fpm::fixed` class provide common m
 * `two_pi()`: _2π_, roughly equal to 6.2831853.
 
 ## Accuracy and performance
-Please refer to the pages for [accuracy](accuracy.md) and [performance](performance.md) results.
+Please refer to the pages for [accuracy](accuracy.md) and [performance](performance.md) results, including how the number of fraction bits affects the speed.
 
 ## Limitations
 Unlike floating-point numbers, `fpm::fixed`:

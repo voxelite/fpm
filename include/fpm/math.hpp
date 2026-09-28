@@ -20,6 +20,10 @@ namespace fpm
 	namespace detail
 	{
 
+		/// Value bits (without the sign) of a signed integer type. From its size, so this works for 128-bit types as well.
+		template<typename T>
+		inline constexpr int32_t value_bits = static_cast<int32_t>(sizeof(T)) * 8 - 1;
+
 		/// Returns the index of the most-significant set bit of a positive value, in the value's own width
 		/// (up to 128 bits)
 		template<typename T>
@@ -61,6 +65,28 @@ namespace fpm
 			if(num > res)
 				++res;
 			return res;
+		}
+
+		/// Integer square root of a non-negative value below 4^Steps, rounded to nearest.
+		/// A fixed number of branch-free steps (known at compile time), one per bit of the result. T must be signed.
+		template<int32_t Steps, typename T>
+		[[nodiscard]] inline constexpr T sqrt_steps(T num) noexcept
+		{
+			static_assert(T(-1) < T(0) && 2 * Steps < value_bits<T>);
+			assert(num >= 0);
+			T res = 0;
+			for(int32_t i = Steps - 1; i >= 0; --i)
+			{
+				const T bit = T{1} << (2 * i);
+				const T value = res + bit;
+				const T difference = num - value;
+				// All ones if num < value (the bit is not set), from the sign: a comparison would become an unpredictable branch
+				const T below = difference >> value_bits<T>;
+				num = difference + (value & below);
+				res = (res >> 1) + (bit & ~below);
+			}
+			// Round the last digit up if necessary: (res + 0.5)^2 = res^2 + res + 0.25
+			return num > res ? res + 1 : res;
 		}
 
 		/// Quotient of x / y rounded to nearest (ties to even), and the matching remainder x - quotient * y
@@ -106,10 +132,6 @@ namespace fpm
 			}
 			return {q, r};
 		}
-
-		/// Value bits (without the sign) of a signed integer type. From its size, so this works for 128-bit types as well.
-		template<typename T>
-		inline constexpr int32_t value_bits = static_cast<int32_t>(sizeof(T)) * 8 - 1;
 
 		template<typename I>
 		[[nodiscard]] consteval auto signed_type_of() noexcept
@@ -1109,11 +1131,14 @@ namespace fpm
 		{
 			constexpr int32_t M = poly_bits<B, 1>;
 
-			// asin(x) = atan(x / sqrt(1 - x^2)), with sqrt(1 - x^2) exactly rounded to QM:
-			// the raw value of 1 - x^2 in Q(2F) is 2^(2F) - X^2 for the raw value X
+			// asin(x) = atan(x / sqrt(1 - x^2)). The raw value of 1 - x^2 in Q(2F) is exactly 2^(2F) - X^2 for the raw value X.
+			// Its square root is rounded to K = F + 8 fraction bits: its error passes on to the angle about one to one,
+			// so this adds at most 1/512 unit to the result. Fewer bits than M make the root faster: it takes K + 1 steps.
+			constexpr int32_t K = std::min(static_cast<int32_t>(F) + 8, M);
+			using SI = signed_intermediate<I>;
 			const I a = magnitude<B, I>(x.raw_value());
-			const I root = sqrt_rounded(shift_by<2 * (M - static_cast<int32_t>(F))>(static_cast<I>((I{1} << (2 * F)) - a * a)));
-			const I angle = atan_ratio<B, I, F>(shift_by<M - static_cast<int32_t>(F)>(a), root);
+			const auto root = static_cast<I>(sqrt_steps<K + 1>(shift_by<2 * (K - static_cast<int32_t>(F))>(static_cast<SI>((SI{1} << (2 * F)) - static_cast<SI>(a * a)))));
+			const I angle = atan_ratio<B, I, F>(shift_by<K - static_cast<int32_t>(F)>(a), root);
 			return is_negative(x.raw_value()) ? static_cast<I>(-angle) : angle;
 		}
 	}
