@@ -423,7 +423,10 @@ TEST(math_types, unsigned_base_types)
 		EXPECT_TRUE(within(ld(cbrt(U(v))), std::cbrt(static_cast<long double>(v)), eps<U>)) << v;
 		EXPECT_TRUE(within(ld(sqrt(U(v))), std::sqrt(static_cast<long double>(v)), eps<U>)) << v;
 	}
-	EXPECT_EQ(uint32_t{0} - U(1.5).raw_value(), (-U(1.5)).raw_value());
 	static_assert(abs(U(3)) == U(3));
+#ifndef FPM_CHECK_OVERFLOW
+	// The negative of an unsigned number wraps around
+	EXPECT_EQ(uint32_t{0} - U(1.5).raw_value(), (-U(1.5)).raw_value());
 	static_assert((-(-U(3))) == U(3));
+#endif
 }

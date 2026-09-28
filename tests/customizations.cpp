@@ -202,7 +202,7 @@ TYPED_TEST(customizations, numeric_limits)
 	EXPECT_EQ(L::round_style, std::round_to_nearest);
 	EXPECT_EQ(L::is_iec559, false);
 	EXPECT_EQ(L::is_bounded, true);
-	EXPECT_EQ(L::is_modulo, false);
+	EXPECT_EQ(L::is_modulo, fpm::detail::defined_overflow); // the operators wrap around with FPM_DEFINED_OVERFLOW
 	EXPECT_EQ(L::digits, TL::digits());
 	EXPECT_EQ(L::digits10, 0);
 	EXPECT_EQ(L::max_digits10, TL::max_digits10());

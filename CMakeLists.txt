@@ -18,6 +18,20 @@ if(FPM_FRACTION_STRICT)
   target_compile_definitions(fpm INTERFACE FPM_FRACTION_STRICT)
 endif()
 
+# Results that fpm::fixed cannot represent are not defined, like the overflow of integers. These options change that,
+# for all the targets that use fpm, so they agree:
+# - FPM_DEFINED_OVERFLOW defines them, which costs some speed in the mathematical functions;
+# - FPM_CHECK_OVERFLOW makes such a result of an arithmetic operator an error, which `assert` reports.
+option(FPM_DEFINED_OVERFLOW "Results that fpm::fixed cannot represent are defined: the operators wrap around, the mathematical functions saturate" OFF)
+if(FPM_DEFINED_OVERFLOW)
+  target_compile_definitions(fpm INTERFACE FPM_DEFINED_OVERFLOW)
+endif()
+
+option(FPM_CHECK_OVERFLOW "The results of the operators of fpm::fixed must be ones that the type can represent" OFF)
+if(FPM_CHECK_OVERFLOW)
+  target_compile_definitions(fpm INTERFACE FPM_CHECK_OVERFLOW)
+endif()
+
 # Tests, benchmarks and the accuracy tool are only built by default if this is the top-level project
 option(FPM_BUILD_ACCURACY  "Build the fpm accuracy tool" ${PROJECT_IS_TOP_LEVEL})
 option(FPM_BUILD_BENCHMARK "Build the fpm benchmarks"    ${PROJECT_IS_TOP_LEVEL})
@@ -54,6 +68,7 @@ if(FPM_BUILD_TESTS)
     tests/manip.cpp
     tests/math_types.cpp
     tests/nearest.cpp
+    tests/overflow.cpp
     tests/output.cpp
     tests/power.cpp
     tests/trigonometry.cpp

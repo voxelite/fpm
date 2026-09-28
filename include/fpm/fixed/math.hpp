@@ -38,6 +38,24 @@ namespace fpm
 			}
 		}
 
+		/// |x| of a raw value, in the intermediate type (where it cannot overflow)
+		template<typename B, typename I>
+		[[nodiscard]] inline constexpr I magnitude(const B raw) noexcept
+		{
+			if constexpr(std::is_signed_v<B>)
+				return raw < 0 ? static_cast<I>(-static_cast<I>(raw)) : static_cast<I>(raw);
+			else
+				return static_cast<I>(raw);
+		}
+
+		/// The magnitude of a raw value in the unsigned type of its width, which holds the one of the lowest value too
+		template<typename B>
+		[[nodiscard]] inline constexpr std::make_unsigned_t<B> unsigned_magnitude(const B raw) noexcept
+		{
+			using U = std::make_unsigned_t<B>;
+			return is_negative(raw) ? static_cast<U>(U{0} - static_cast<U>(raw)) : static_cast<U>(raw);
+		}
+
 		/// Integer square root of a non-negative value, rounded to nearest
 		template<typename T>
 		[[nodiscard]] inline constexpr T sqrt_rounded(T num) noexcept
@@ -101,10 +119,10 @@ namespace fpm
 			{
 				// The one case where native division overflows: the division is exact
 				if(y == -1)
-					return {-static_cast<Q>(x), 0};
+					return {static_cast<Q>(-static_cast<Q>(x)), Q{0}};
 			}
-			Q q = x / y;
-			T r = x % y;
+			auto q = static_cast<Q>(x / y);
+			auto r = static_cast<T>(x % y);
 
 			// Compare |r| with |y| / 2 using unsigned magnitudes, which cannot overflow
 			using U = std::make_unsigned_t<T>;
@@ -373,6 +391,26 @@ namespace fpm
 			{
 				return fixed<B, I, F, R>::from_raw_value(static_cast<B>(static_cast<U>(static_cast<U>(integer) << F)));
 			}
+
+			/// The fixed-point value of `floor`, or of the integer above it if `up`. The one above the largest integer
+			/// is not a number of the type: with FPM_DEFINED_OVERFLOW the result saturates to the maximum.
+			template<typename I, bool R>
+			[[nodiscard]] constexpr fixed<B, I, F, R> rounded(const bool up) const noexcept
+			{
+				if constexpr(defined_overflow)
+				{
+					// That integer is 2^(bits - F), which wraps around: to the lowest value of a signed type, where the sign
+					// changes from positive to negative, and to 0 for an unsigned type, where the highest bit goes from 1 to 0.
+					// One less than that is the maximum. Without a branch, so loops can be vectorized.
+					constexpr int32_t top = std::numeric_limits<U>::digits - 1;
+					const auto result = static_cast<U>(static_cast<U>(static_cast<U>(floor) + (up ? 1u : 0u)) << F);
+					const auto before = static_cast<U>(static_cast<U>(floor) << F);
+					const auto changed = static_cast<U>(std::is_signed_v<B> ? (~before & result) : (before & ~result));
+					return fixed<B, I, F, R>::from_raw_value(static_cast<B>(result - static_cast<U>(changed >> top)));
+				}
+				else
+					return to_fixed<I, R>(static_cast<B>(floor + (up ? 1 : 0)));
+			}
 		};
 	}
 
@@ -380,7 +418,7 @@ namespace fpm
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> ceil(fixed<B, I, F, R> x) noexcept
 	{
 		const detail::floor_parts<B, F> parts(x.raw_value());
-		return parts.template to_fixed<I, R>(static_cast<B>(parts.floor + (parts.fraction != 0 ? 1 : 0)));
+		return parts.template rounded<I, R>(parts.fraction != 0);
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -405,7 +443,7 @@ namespace fpm
 		using Parts = detail::floor_parts<B, F>;
 		const Parts parts(x.raw_value());
 		const bool up = parts.fraction > Parts::half || (parts.fraction == Parts::half && x.raw_value() >= 0);
-		return parts.template to_fixed<I, R>(static_cast<B>(parts.floor + (up ? 1 : 0)));
+		return parts.template rounded<I, R>(up);
 	}
 
 	/// Round to nearest, ties to even (rounding mode is assumed to be FE_TONEAREST)
@@ -415,7 +453,7 @@ namespace fpm
 		using Parts = detail::floor_parts<B, F>;
 		const Parts parts(x.raw_value());
 		const bool up = parts.fraction > Parts::half || (parts.fraction == Parts::half && (parts.floor & 1) != 0);
-		return parts.template to_fixed<I, R>(static_cast<B>(parts.floor + (up ? 1 : 0)));
+		return parts.template rounded<I, R>(up);
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -427,15 +465,88 @@ namespace fpm
 
 	#pragma endregion
 
+	namespace detail
+	{
+		/// The raw value of a result in the base type. With FPM_DEFINED_OVERFLOW the mathematical functions saturate:
+		/// a result beyond the range is the maximum or the lowest value. `Check` is whether that can happen for the type:
+		/// only then it is looked for.
+		template<typename B, bool Check, typename T>
+		[[nodiscard]] inline constexpr B saturated(const T value) noexcept
+		{
+			if constexpr(Check)
+			{
+				if(value > static_cast<T>(std::numeric_limits<B>::max()))
+					return std::numeric_limits<B>::max();
+				if(value < static_cast<T>(std::numeric_limits<B>::lowest()))
+					return std::numeric_limits<B>::lowest();
+			}
+			return static_cast<B>(value);
+		}
+
+		/// Whether the type cannot represent every logarithm: the ones of numbers below 1 are negative and down to -F (in base 2)
+		template<typename B, uint32_t F>
+		inline constexpr bool log_saturates = defined_overflow
+			&& (!std::is_signed_v<B> || static_cast<uint64_t>(F) > (static_cast<uint64_t>(std::numeric_limits<B>::max()) >> F) + 1);
+
+		/// Whether the type cannot represent every angle from -π to π. The angles of numbers that are not negative are
+		/// at most π/2, which every type can represent.
+		template<typename B, uint32_t F>
+		inline constexpr bool angle_saturates = defined_overflow && std::is_signed_v<B> && std::numeric_limits<B>::digits - static_cast<int32_t>(F) < 2;
+
+		/// x *= y. With FPM_DEFINED_OVERFLOW the product wraps around, and `representable` becomes false
+		/// if the type cannot represent it.
+		template<typename B, typename I, uint32_t F, bool R>
+		inline constexpr void multiply_power(fixed<B, I, F, R>& x, const fixed<B, I, F, R> y, [[maybe_unused]] bool& representable) noexcept
+		{
+			if constexpr(defined_overflow)
+			{
+				const I product = shift_right<R>(static_cast<I>(static_cast<I>(x.raw_value()) * static_cast<I>(y.raw_value())), F);
+				const auto narrow = static_cast<B>(product);
+				x = fixed<B, I, F, R>::from_raw_value(narrow);
+				representable &= static_cast<I>(narrow) == product;
+			}
+			else
+				x *= y;
+		}
+
+		/// x = 1 / x. With FPM_DEFINED_OVERFLOW the quotient wraps around, and `representable` becomes false
+		/// if the type cannot represent it.
+		template<typename B, typename I, uint32_t F, bool R>
+		inline constexpr void invert_power(fixed<B, I, F, R>& x, [[maybe_unused]] bool& representable) noexcept
+		{
+			if constexpr(defined_overflow)
+			{
+				const I divisor = static_cast<I>(x.raw_value());
+				const I quotient = R
+					? shift_right<true>(static_cast<I>((I{1} << (2 * F + 1)) / divisor), 1)
+					: static_cast<I>((I{1} << (2 * F)) / divisor);
+				const auto narrow = static_cast<B>(quotient);
+				x = fixed<B, I, F, R>::from_raw_value(narrow);
+				representable &= static_cast<I>(narrow) == quotient;
+			}
+			else
+				x = fixed<B, I, F, R>(1) / x;
+		}
+	}
+
 	#pragma region Mathematical functions
 
+	/// The absolute value. With FPM_DEFINED_OVERFLOW it saturates: the one of the lowest value is the maximum.
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> abs(fixed<B, I, F, R> x) noexcept
 	{
-		if constexpr(std::is_signed_v<B>)
+		if constexpr(!std::is_signed_v<B>)
+			return x; // unsigned values are never negative
+		else if constexpr(!detail::defined_overflow)
 			return (x >= fixed<B, I, F, R>{0}) ? x : -x;
 		else
-			return x; // unsigned values are never negative
+		{
+			using U = std::make_unsigned_t<B>;
+			// The magnitude of the lowest value is the only one with the highest bit: 1 less is the maximum.
+			// Without a branch, so loops can be vectorized.
+			const U magnitude = detail::unsigned_magnitude(x.raw_value());
+			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(magnitude - static_cast<U>(magnitude >> (std::numeric_limits<U>::digits - 1))));
+		}
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -466,7 +577,7 @@ namespace fpm
 		assert(quo != nullptr);
 		const auto division = detail::divide_to_nearest<I>(x.raw_value(), y.raw_value());
 		const I quotient = division.quotient;
-		const auto low_bits = static_cast<int>((quotient < 0 ? -quotient : quotient) & I{0x3FFF'FFFF});
+		const auto low_bits = static_cast<int>(static_cast<uint32_t>(quotient < 0 ? -quotient : quotient) & 0x3FFF'FFFFu);
 		*quo = quotient < 0 ? -low_bits : low_bits;
 		return fixed<B, I, F, R>::from_raw_value(static_cast<B>(division.remainder));
 	}
@@ -475,11 +586,29 @@ namespace fpm
 
 	#pragma region Manipulation functions
 
+	/// The magnitude of x with the sign of y. With FPM_DEFINED_OVERFLOW it saturates: to the maximum for the lowest value
+	/// with a positive sign, and to 0 for an unsigned type with a negative one.
 	template<typename B, typename I, uint32_t F, bool R, typename C, typename J, uint32_t G, bool S>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> copysign(fixed<B, I, F, R> x, fixed<C, J, G, S> y) noexcept
 	{
-		x = abs(x);
-		return (y >= fixed<C, J, G, S>{0}) ? x : -x;
+		if constexpr(!detail::defined_overflow)
+		{
+			x = abs(x);
+			return (y >= fixed<C, J, G, S>{0}) ? x : -x;
+		}
+		else
+		{
+			if(!detail::is_negative(y.raw_value()))
+				return abs(x);
+			if constexpr(std::is_signed_v<B>)
+			{
+				// The negative of the magnitude is a number of the type for every magnitude
+				using U = std::make_unsigned_t<B>;
+				return fixed<B, I, F, R>::from_raw_value(static_cast<B>(U{0} - detail::unsigned_magnitude(x.raw_value())));
+			}
+			else
+				return fixed<B, I, F, R>{};
+		}
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -488,9 +617,9 @@ namespace fpm
 		if(from == to)
 			return to;
 		else if(to > from)
-			return fixed<B, I, F, R>::from_raw_value(from.raw_value() + 1);
+			return from + fixed<B, I, F, R>::from_raw_value(1);
 		else
-			return fixed<B, I, F, R>::from_raw_value(from.raw_value() - 1);
+			return from - fixed<B, I, F, R>::from_raw_value(1);
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -512,6 +641,8 @@ namespace fpm
 
 	#pragma region Power functions
 
+	/// base^exp. With FPM_DEFINED_OVERFLOW, results too large to represent saturate: to the maximum,
+	/// or to the lowest value if they are negative.
 	template<typename B, typename I, uint32_t F, bool R, std::integral T>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> pow(fixed<B, I, F, R> base, T exp) noexcept
 	{
@@ -530,6 +661,12 @@ namespace fpm
 		using U = std::make_unsigned_t<T>;
 		U n = exp < 0 ? static_cast<U>(U{0} - static_cast<U>(exp)) : static_cast<U>(exp);
 
+		// With FPM_DEFINED_OVERFLOW: a power that the type cannot represent is a factor of the result, and the other ones
+		// are at least 1, so then the result is one that it cannot represent either. The powers are calculated all the same
+		// (they wrap around), so that there is no branch for it in the loop.
+		const Fixed beyond = (detail::is_negative(base.raw_value()) && (n % 2) != 0) ? std::numeric_limits<Fixed>::lowest() : std::numeric_limits<Fixed>::max();
+		bool representable = true;
+
 		// Negative exponent:
 		// - |base| >= 1: divide by the powers of base (most precise), but switch to multiplying with the powers
 		//   of 1/base if a power would overflow, since the result can still be representable;
@@ -540,7 +677,7 @@ namespace fpm
 			small_base = small_base && base > -Fixed(1);
 		if(divide && small_base)
 		{
-			base = Fixed(1) / base;
+			detail::invert_power(base, representable);
 			divide = false;
 		}
 
@@ -552,7 +689,12 @@ namespace fpm
 		for(;;)
 		{
 			if((n % 2) != 0)
-				result = divide ? result / base : result * base;
+			{
+				if(divide)
+					result /= base; // |base| >= 1
+				else
+					detail::multiply_power(result, base, representable);
+			}
 			n /= 2;
 			if(n == 0)
 				break;
@@ -568,42 +710,59 @@ namespace fpm
 					divide = false;
 				}
 			}
-			base *= base;
+			detail::multiply_power(base, base, representable);
 		}
-		return result;
+		return representable ? result : beyond;
 	}
 
 	namespace detail
 	{
 		/// 2^(z / 2^Z) for z with Z fraction bits, rounded to nearest. Results too large to represent saturate to the maximum,
-		/// results too small to represent are 0.
-		template<typename B, typename I, uint32_t F, bool R, int32_t Z>
+		/// results too small to represent are 0. With `MinusOne` the result is 1 less, and it is the one that saturates:
+		/// 2^z itself can be beyond the range of the type.
+		template<typename B, typename I, uint32_t F, bool R, int32_t Z, bool MinusOne = false>
 		[[nodiscard]] inline constexpr fixed<B, I, F, R> exp2_fixed_point(const signed_intermediate<I> z) noexcept
 		{
 			using Fixed = fixed<B, I, F, R>;
 			using SI = signed_intermediate<I>;
 			using S = std::make_signed_t<B>;
 			using U = std::make_unsigned_t<B>;
+			constexpr SI subtracted = MinusOne ? SI{1} << F : SI{0};
 
 			// z = n + f, with integer n and f in [0, 1)
 			const SI n = z >> Z; // arithmetic shift: rounds towards negative infinity
-			if(n > std::numeric_limits<B>::digits - static_cast<int32_t>(F) - 1) [[unlikely]]
-				return std::numeric_limits<Fixed>::max(); // 2^z >= 2^(n) would not fit
+			if(n > std::numeric_limits<B>::digits - static_cast<int32_t>(F) - 1 + MinusOne) [[unlikely]]
+				return std::numeric_limits<Fixed>::max(); // 2^z >= 2^n would not fit, and neither would 2^n - 1 with one more
 			if(n < -static_cast<SI>(F) - 1) [[unlikely]]
-				return Fixed(0); // 2^z < 2^-(F + 1) rounds to 0
+				return Fixed::from_raw_value(static_cast<B>(-subtracted)); // 2^z < 2^-(F + 1) rounds to 0
 
 			// 2^f = 1 + f Q(f) in [1, 2), with M fraction bits. Precise to the last of them: the largest results use them all.
 			constexpr int32_t M = poly_bits<B, 1>;
 			constexpr auto& coefficients = exp2_coefficients<B, M, M + 1>;
 			const auto f = static_cast<S>(shift_by<M - Z>(static_cast<SI>(z - (n << Z))));
-			const auto mantissa = static_cast<U>((U{1} << M) + static_cast<U>(poly_multiply<I, M, S>(f, estrin<I, M>(coefficients, f))));
+			// 2^f < 2, but its approximation can round up to 2: with the largest n that would not fit
+			constexpr U below_two = static_cast<U>((U{1} << (M + 1)) - 1u);
+			const auto mantissa = std::min<U>(below_two, static_cast<U>((U{1} << M) + static_cast<U>(poly_multiply<I, M, S>(f, estrin<I, M>(coefficients, f)))));
 
-			// 2^n * 2^f is a shift of the mantissa, rounded to QF. The mantissa is positive and below 2^(M+1),
-			// so this is done in the unsigned type of the base's width. n is within the range checked above.
+			// 2^n * 2^f is a shift of the mantissa, rounded to QF. n is within the range checked above.
 			const int32_t shift = M - static_cast<int32_t>(F) - static_cast<int32_t>(n);
-			if(shift <= 0)
-				return Fixed::from_raw_value(static_cast<B>(static_cast<U>(mantissa << -shift)));
-			return Fixed::from_raw_value(static_cast<B>(static_cast<U>(static_cast<U>(mantissa >> (shift - 1)) + 1u) >> 1));
+			if constexpr(MinusOne)
+			{
+				// 2^z can have one bit more than the base type, so this is done in the intermediate type
+				const SI power = (shift <= 0)
+					? static_cast<SI>(static_cast<SI>(mantissa) << -shift)
+					: static_cast<SI>((static_cast<SI>(static_cast<U>(mantissa >> (shift - 1))) + SI{1}) >> 1);
+				const SI result = power - subtracted;
+				constexpr auto largest = static_cast<SI>(std::numeric_limits<B>::max());
+				return Fixed::from_raw_value(static_cast<B>(result > largest ? largest : result));
+			}
+			else
+			{
+				// The mantissa is positive and below 2^(M+1), so this is done in the unsigned type of the base's width
+				if(shift <= 0)
+					return Fixed::from_raw_value(static_cast<B>(static_cast<U>(mantissa << -shift)));
+				return Fixed::from_raw_value(static_cast<B>(static_cast<U>(static_cast<U>(mantissa >> (shift - 1)) + 1u) >> 1));
+			}
 		}
 
 		/// log2(x) = e + p, with integer e and p in [-1/2, 1/2] with M fraction bits
@@ -614,18 +773,36 @@ namespace fpm
 			std::make_signed_t<B> p;
 		};
 
-		/// log2 of a positive raw value with F fraction bits, with a polynomial precise to `Bits` bits
-		template<typename B, uint32_t F, typename I, int32_t Bits>
+		/// log2 of a positive raw value with F fraction bits, with a polynomial precise to `Bits` bits.
+		/// With `PlusOne` it is log2 of 1 more than the value (which is above -1): that number can be beyond the range of the type.
+		template<typename B, uint32_t F, typename I, int32_t Bits, bool PlusOne = false>
 		[[nodiscard]] inline constexpr log2_parts<B> log2_split(const B raw) noexcept
 		{
-			assert(raw > 0);
 			using S = std::make_signed_t<B>;
 			using U = std::make_unsigned_t<B>;
 			constexpr int32_t M = poly_bits<B, 1>;
+			constexpr int32_t top = std::numeric_limits<U>::digits - 1;
+
+			// The number, as an unsigned value. 1 more than the largest value of a signed type fits in it as well;
+			// for an unsigned type the sum can have one more bit, which is moved to the exponent.
+			auto value = static_cast<U>(raw);
+			int32_t carry = 0;
+			if constexpr(PlusOne)
+			{
+				constexpr U one = U{1} << F;
+				value = static_cast<U>(value + one);
+				if constexpr(std::is_signed_v<B>)
+					assert(raw > -static_cast<S>(one));
+				else
+				{
+					carry = value < one;
+					value = static_cast<U>(static_cast<U>(value >> carry) | static_cast<U>(static_cast<U>(carry) << top));
+				}
+			}
+			else
+				assert(raw > 0);
 
 			// Normalize to m in [1, 2), in QM: move the highest bit to the top, then down to bit M
-			constexpr int32_t top = std::numeric_limits<U>::digits - 1;
-			const auto value = static_cast<U>(raw);
 			const int32_t leading_zeros = std::countl_zero(value);
 			const auto m = static_cast<U>(static_cast<U>(value << leading_zeros) >> (top - M));
 
@@ -636,18 +813,18 @@ namespace fpm
 			const auto t = static_cast<S>(static_cast<S>(m >> upper) - (S{1} << M));
 			constexpr auto& coefficients = log2_coefficients<B, M, Bits>;
 			return {
-				top - leading_zeros - static_cast<int32_t>(F) + upper,
+				top - leading_zeros - static_cast<int32_t>(F) + upper + carry,
 				poly_multiply<I, M, S>(t, estrin<I, M>(coefficients, t))
 			};
 		}
 
-		/// log2(x) * c for a constant 0 < c < 1 in Q63, rounded to nearest
-		template<int64_t ConstantQ63, typename B, typename I, uint32_t F, bool R>
+		/// log2(x) * c for a constant 0 < c < 1 in Q63, rounded to nearest. With `PlusOne` it is log2(1 + x) * c.
+		template<int64_t ConstantQ63, bool PlusOne, typename B, typename I, uint32_t F, bool R>
 		[[nodiscard]] inline constexpr fixed<B, I, F, R> log2_times(const fixed<B, I, F, R> x) noexcept
 		{
 			using SI = signed_intermediate<I>;
 			constexpr int32_t M = poly_bits<B, 1>;
-			const auto [e, p] = log2_split<B, F, I, target_bits<F, M>>(x.raw_value());
+			const auto [e, p] = log2_split<B, F, I, target_bits<F, M>, PlusOne>(x.raw_value());
 
 			// e * c + p * c, both products with as many fraction bits as the signed intermediate type allows.
 			// |e| <= 64, and |p| <= 2^(M-1) (as a raw value).
@@ -657,7 +834,7 @@ namespace fpm
 			const SI high = static_cast<SI>(e) * round_constant<SI>(ConstantQ63, 63, E);
 			const SI low = static_cast<SI>(p) * round_constant<SI>(ConstantQ63, 63, P);
 			const SI sum = shift_by<Q - E>(high) + shift_by<Q - M - P>(low);
-			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(round_shift<Q - static_cast<int32_t>(F)>(sum)));
+			return fixed<B, I, F, R>::from_raw_value(saturated<B, log_saturates<B, F>>(round_shift<Q - static_cast<int32_t>(F)>(sum)));
 		}
 	}
 
@@ -716,29 +893,41 @@ namespace fpm
 		return detail::exp2_fixed_point<B, I, F, R, static_cast<int32_t>(F) + K>((high << K) + low_k);
 	}
 
+	namespace detail
+	{
+		/// e^x, or e^x - 1 with `MinusOne`: e^x itself can be beyond the range of the type then.
+		/// Results too large to represent saturate to the maximum.
+		template<bool MinusOne, typename B, typename I, uint32_t F, bool R>
+		[[nodiscard]] inline constexpr fixed<B, I, F, R> exp_fixed_point(const fixed<B, I, F, R> x) noexcept
+		{
+			using Fixed = fixed<B, I, F, R>;
+			using SI = signed_intermediate<I>;
+
+			// e^x = 2^(x * log2(e)). e^x > 2^x does not fit for x >= digits - F (and e^x - 1 > 2^(x - 1) does not for one more),
+			// and e^x < 2^-(F + 2) rounds to 0 for x <= -(F + 2).
+			constexpr int32_t limit = std::numeric_limits<B>::digits - static_cast<int32_t>(F) + MinusOne;
+			const auto raw = static_cast<SI>(x.raw_value());
+			if(raw >= (SI{limit} << F)) [[unlikely]]
+				return std::numeric_limits<Fixed>::max();
+			if constexpr(std::is_signed_v<B>)
+			{
+				if(raw <= -(SI{static_cast<int32_t>(F) + 2} << F)) [[unlikely]]
+					return Fixed::from_raw_value(static_cast<B>(MinusOne ? -(SI{1} << F) : SI{0}));
+			}
+
+			// Now |raw| < 2^(F + range): the product with log2(e) can have P fraction bits
+			constexpr int32_t range = static_cast<int32_t>(std::bit_width(static_cast<uint32_t>(std::max<int32_t>(limit, static_cast<int32_t>(F) + 2))));
+			constexpr int32_t XBits = static_cast<int32_t>(F) + range;
+			constexpr int32_t P = std::min<int32_t>(62, value_bits<SI> - XBits - 1);
+			return exp2_fixed_point<B, I, F, R, static_cast<int32_t>(F) + P, MinusOne>(multiply_by_long_constant<SI, log2_e, XBits, P>(raw));
+		}
+	}
+
 	/// e^x. Results too large to represent saturate to the maximum.
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> exp(fixed<B, I, F, R> x) noexcept
 	{
-		using Fixed = fixed<B, I, F, R>;
-		using SI = detail::signed_intermediate<I>;
-
-		// e^x = 2^(x * log2(e)). e^x > 2^x does not fit for x >= digits - F, and e^x < 2^-(F + 2) rounds to 0 for x <= -(F + 2).
-		constexpr int32_t digits = std::numeric_limits<B>::digits;
-		const auto raw = static_cast<SI>(x.raw_value());
-		if(raw >= (SI{digits - static_cast<int32_t>(F)} << F)) [[unlikely]]
-			return std::numeric_limits<Fixed>::max();
-		if constexpr(std::is_signed_v<B>)
-		{
-			if(raw <= -(SI{static_cast<int32_t>(F) + 2} << F)) [[unlikely]]
-				return Fixed(0);
-		}
-
-		// Now |raw| < 2^(F + range): the product with log2(e) can have P fraction bits
-		constexpr int32_t range = static_cast<int32_t>(std::bit_width(static_cast<uint32_t>(std::max<int32_t>(digits - static_cast<int32_t>(F), static_cast<int32_t>(F) + 2))));
-		constexpr int32_t XBits = static_cast<int32_t>(F) + range;
-		constexpr int32_t P = std::min<int32_t>(62, detail::value_bits<SI> - XBits - 1);
-		return detail::exp2_fixed_point<B, I, F, R, static_cast<int32_t>(F) + P>(detail::multiply_by_long_constant<SI, detail::log2_e, XBits, P>(raw));
+		return detail::exp_fixed_point<false>(x);
 	}
 
 	/// 2^x. Results too large to represent saturate to the maximum.
@@ -748,12 +937,15 @@ namespace fpm
 		return detail::exp2_fixed_point<B, I, F, R, static_cast<int32_t>(F)>(static_cast<detail::signed_intermediate<I>>(x.raw_value()));
 	}
 
+	/// e^x - 1, also where e^x is beyond the range of the type. Results too large to represent saturate to the maximum.
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> expm1(fixed<B, I, F, R> x) noexcept
 	{
-		return exp(x) - 1;
+		return detail::exp_fixed_point<true>(x);
 	}
 
+	/// The logarithms saturate to the lowest value where the type cannot represent the result: that is possible
+	/// for unsigned types, and for types with few integral bits.
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> log2(fixed<B, I, F, R> x) noexcept
 	{
@@ -761,29 +953,32 @@ namespace fpm
 		assert(x > Fixed(0));
 
 		// e + p, rounded from QM to QF
+		using SI = detail::signed_intermediate<I>;
 		constexpr int32_t M = detail::poly_bits<B, 1>;
 		const auto [e, p] = detail::log2_split<B, F, I, detail::target_bits<F, M>>(x.raw_value());
-		return Fixed::from_raw_value(static_cast<B>((static_cast<I>(e) << F) + detail::round_shift<M - static_cast<int32_t>(F)>(static_cast<I>(p))));
+		const SI result = (static_cast<SI>(e) << F) + detail::round_shift<M - static_cast<int32_t>(F)>(static_cast<SI>(p));
+		return Fixed::from_raw_value(detail::saturated<B, detail::log_saturates<B, F>>(result));
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> log(fixed<B, I, F, R> x) noexcept
 	{
 		assert(x.raw_value() > 0);
-		return detail::log2_times<int64_t{6393154322601327830}>(x); // ln(2) = 0.69314718055994530942
+		return detail::log2_times<int64_t{6393154322601327830}, false>(x); // ln(2) = 0.69314718055994530942
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> log10(fixed<B, I, F, R> x) noexcept
 	{
 		assert(x.raw_value() > 0);
-		return detail::log2_times<int64_t{2776511644261678566}>(x); // log10(2) = 0.30102999566398119521
+		return detail::log2_times<int64_t{2776511644261678566}, false>(x); // log10(2) = 0.30102999566398119521
 	}
 
+	/// log(1 + x), also where 1 + x is beyond the range of the type
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> log1p(fixed<B, I, F, R> x) noexcept
 	{
-		return log(1 + x);
+		return detail::log2_times<int64_t{6393154322601327830}, true>(x); // ln(2) = 0.69314718055994530942
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -793,9 +988,9 @@ namespace fpm
 
 		if(x == Fixed(0))
 			return x;
-		if(x < Fixed(0))
-			return -cbrt(-x);
-		assert(x >= Fixed(0));
+
+		// The root of the magnitude, in the intermediate type: the one of the lowest value does not fit the base type
+		const bool negative = detail::is_negative(x.raw_value());
 
 		// The result's raw value is cbrt(X * 2^(2F)) for the raw value X, rounded to nearest.
 		// Digit-by-digit cube root (base 2), consuming N = X * 2^(2F) three bits at a time from the top,
@@ -814,7 +1009,7 @@ namespace fpm
 		constexpr int32_t a = (2 * static_cast<int32_t>(F)) % 3;
 		constexpr int32_t zero_groups = (2 * static_cast<int32_t>(F)) / 3 - skip;
 		static_assert(zero_groups >= 0);
-		const W shifted = static_cast<W>(static_cast<W>(x.raw_value()) << a);
+		const W shifted = static_cast<W>(detail::magnitude<B, I>(x.raw_value()) << a);
 		const int32_t data_groups = detail::find_highest_bit(shifted) / 3 + 1;
 		const int32_t total_groups = data_groups + zero_groups;
 		const auto bits_of = [&](const int32_t k) -> W // k-th 3-bit group of N from the top
@@ -868,7 +1063,8 @@ namespace fpm
 		if(8 * remainder > 12 * root_squared + 6 * root + 1)
 			++root;
 
-		return Fixed::from_raw_value(static_cast<B>(root << skip));
+		const auto result = Fixed::from_raw_value(static_cast<B>(root << skip));
+		return negative ? -result : result;
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -1069,21 +1265,11 @@ namespace fpm
 			return swap ? static_cast<I>(round_constant<I>(half_pi_q62, 62, M) - angle) : angle;
 		}
 
-		/// |x| of a raw value, in the intermediate type (where it cannot overflow)
-		template<typename B, typename I>
-		[[nodiscard]] inline constexpr I magnitude(const B raw) noexcept
-		{
-			if constexpr(std::is_signed_v<B>)
-				return raw < 0 ? -static_cast<I>(raw) : static_cast<I>(raw);
-			else
-				return static_cast<I>(raw);
-		}
-
-		/// An angle in QM (in the intermediate type), rounded to QF
+		/// An angle in QM (in the intermediate type), rounded to QF. It saturates for a type that cannot represent π.
 		template<typename B, typename I, uint32_t F, bool R>
 		[[nodiscard]] inline constexpr fixed<B, I, F, R> angle_to_fixed(const I angle) noexcept
 		{
-			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(round_shift<poly_bits<B, 1> - static_cast<int32_t>(F)>(angle)));
+			return fixed<B, I, F, R>::from_raw_value(saturated<B, angle_saturates<B, F>>(round_shift<poly_bits<B, 1> - static_cast<int32_t>(F)>(angle)));
 		}
 
 		/// asin(x) in QM (in the intermediate type), for a result with `Precision` fraction bits (at least F)

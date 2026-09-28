@@ -23,8 +23,30 @@
 	#endif
 #endif
 
+// Results that a type cannot represent are not defined, like the overflow of integers. Two options change that,
+// each for all of a program (they change what the functions of this library do):
+// - FPM_DEFINED_OVERFLOW defines them: the results of the arithmetic operators wrap around, for signed types as well,
+//   and the ones of the mathematical functions saturate. This is the same for every platform, compiler and
+//   optimization level. It costs some speed in the mathematical functions.
+// - FPM_CHECK_OVERFLOW makes such a result of an operator an error, which `assert` reports (so in builds with
+//   assertions, and in constant expressions).
+
 namespace fpm
 {
+	namespace detail
+	{
+#ifdef FPM_DEFINED_OVERFLOW
+		inline constexpr bool defined_overflow = true;
+#else
+		inline constexpr bool defined_overflow = false;
+#endif
+#ifdef FPM_CHECK_OVERFLOW
+		inline constexpr bool checked_overflow = true;
+#else
+		inline constexpr bool checked_overflow = false;
+#endif
+	}
+
 #ifdef FPM_INT128
 	using int128_t = FPM_INT128;
 	static_assert(sizeof(int128_t) > sizeof(int64_t));
@@ -114,6 +136,99 @@ namespace fpm
 			return static_cast<T>(floor + (up ? 1 : 0));
 		}
 
+		/// The result of an operator must be one that the type can represent: see FPM_CHECK_OVERFLOW
+		inline constexpr void check_overflow([[maybe_unused]] const bool fits) noexcept
+		{
+			assert(fits);
+		}
+
+		/// |value| in 64 bits, which is any magnitude of an integer
+		template<std::integral T>
+		[[nodiscard]] inline constexpr uint64_t magnitude_of(const T value) noexcept
+		{
+			return is_negative(value) ? uint64_t{0} - static_cast<uint64_t>(value) : static_cast<uint64_t>(value);
+		}
+
+		/// The largest magnitude of the type B, for a negative or a positive value
+		template<std::integral B>
+		[[nodiscard]] inline constexpr uint64_t largest_magnitude(const bool negative) noexcept
+		{
+			if(negative)
+				return std::is_signed_v<B> ? magnitude_of(std::numeric_limits<B>::lowest()) : uint64_t{0};
+			return static_cast<uint64_t>(std::numeric_limits<B>::max());
+		}
+
+		/// a + b. With FPM_DEFINED_OVERFLOW it wraps around: in the unsigned type, where that is defined.
+		template<std::integral B>
+		[[nodiscard]] inline constexpr B add(const B a, const B b) noexcept
+		{
+			if constexpr(defined_overflow || checked_overflow)
+			{
+				using U = std::make_unsigned_t<std::common_type_t<B, unsigned int>>;
+				const auto result = static_cast<B>(static_cast<U>(a) + static_cast<U>(b));
+				if constexpr(checked_overflow)
+				{
+					// (For signed types: the operands have the same sign, and the result has the other one)
+					if constexpr(std::is_signed_v<B>)
+						check_overflow(((a ^ result) & (b ^ result)) >= 0);
+					else
+						check_overflow(result >= a);
+				}
+				return result;
+			}
+			else
+				return static_cast<B>(a + b);
+		}
+
+		/// a - b. With FPM_DEFINED_OVERFLOW it wraps around.
+		template<std::integral B>
+		[[nodiscard]] inline constexpr B subtract(const B a, const B b) noexcept
+		{
+			if constexpr(defined_overflow || checked_overflow)
+			{
+				using U = std::make_unsigned_t<std::common_type_t<B, unsigned int>>;
+				const auto result = static_cast<B>(static_cast<U>(a) - static_cast<U>(b));
+				if constexpr(checked_overflow)
+				{
+					// (For signed types: the operands have different signs, and the result has the sign of b)
+					if constexpr(std::is_signed_v<B>)
+						check_overflow(((a ^ b) & (a ^ result)) >= 0);
+					else
+						check_overflow(a >= b);
+				}
+				return result;
+			}
+			else
+				return static_cast<B>(a - b);
+		}
+
+		/// raw * y. With FPM_DEFINED_OVERFLOW it wraps around, for any combination of signedness.
+		template<std::integral B, std::integral T>
+		[[nodiscard]] inline constexpr B multiply_by_integer(const B raw, const T y) noexcept
+		{
+			if constexpr(defined_overflow || checked_overflow)
+			{
+				using U = std::make_unsigned_t<std::common_type_t<B, T, unsigned int>>;
+				if constexpr(checked_overflow)
+				{
+					const auto limit = largest_magnitude<B>(is_negative(raw) != is_negative(y));
+					check_overflow(raw == 0 || y == 0 || magnitude_of(raw) <= limit / magnitude_of(y));
+				}
+				return static_cast<B>(static_cast<U>(raw) * static_cast<U>(y));
+			}
+			else
+				return static_cast<B>(raw * y);
+		}
+
+		/// The value of a wider type in the type B: without the bits that do not fit
+		template<std::integral B, typename I>
+		[[nodiscard]] inline constexpr B narrow(const I value) noexcept
+		{
+			if constexpr(checked_overflow)
+				check_overflow(value >= static_cast<I>(std::numeric_limits<B>::lowest()) && value <= static_cast<I>(std::numeric_limits<B>::max()));
+			return static_cast<B>(value);
+		}
+
 		/// raw / y truncated towards zero, for any combination of signedness: the usual arithmetic conversions
 		/// would convert a negative value to a (large) unsigned value. Results that do not fit wrap.
 		template<std::integral B, std::integral T>
@@ -121,6 +236,13 @@ namespace fpm
 		{
 			if constexpr(std::is_signed_v<B> == std::is_signed_v<T>)
 			{
+				if constexpr(std::is_signed_v<B> && (defined_overflow || checked_overflow))
+				{
+					// The one quotient that does not fit: of the lowest value, which is itself when it wraps around
+					using U = std::make_unsigned_t<std::common_type_t<B, unsigned int>>;
+					if(y == T{-1}) [[unlikely]]
+						return static_cast<B>(U{0} - static_cast<U>(raw));
+				}
 				return static_cast<B>(raw / y);
 			}
 			else
@@ -380,14 +502,14 @@ namespace fpm
 
 		inline constexpr fixed& operator+=(const fixed& y) noexcept
 		{
-			m_value += y.m_value;
+			m_value = detail::add(m_value, y.m_value);
 			return *this;
 		}
 
 		template<std::integral I>
 		inline constexpr fixed& operator+=(I y) noexcept
 		{
-			m_value += integral_to_raw(y);
+			m_value = detail::add(m_value, integral_to_raw_checked(y));
 			return *this;
 		}
 
@@ -397,14 +519,14 @@ namespace fpm
 
 		inline constexpr fixed& operator-=(const fixed& y) noexcept
 		{
-			m_value -= y.m_value;
+			m_value = detail::subtract(m_value, y.m_value);
 			return *this;
 		}
 
 		template<std::integral I>
 		inline constexpr fixed& operator-=(I y) noexcept
 		{
-			m_value -= integral_to_raw(y);
+			m_value = detail::subtract(m_value, integral_to_raw_checked(y));
 			return *this;
 		}
 
@@ -416,14 +538,14 @@ namespace fpm
 		{
 			// x * y / 2^FractionBits, with the product in the intermediate type
 			const auto product = static_cast<IntermediateType>(static_cast<IntermediateType>(m_value) * static_cast<IntermediateType>(y.m_value));
-			m_value = static_cast<BaseType>(detail::shift_right<EnableRounding>(product, FractionBits));
+			m_value = detail::narrow<BaseType>(detail::shift_right<EnableRounding>(product, FractionBits));
 			return *this;
 		}
 
 		template<std::integral I>
 		inline constexpr fixed& operator*=(I y) noexcept
 		{
-			m_value = static_cast<BaseType>(m_value * y);
+			m_value = detail::multiply_by_integer(m_value, y);
 			return *this;
 		}
 
@@ -439,11 +561,11 @@ namespace fpm
 			{
 				// One more bit in the quotient, to correctly round the last bit of the result
 				const auto quotient = static_cast<IntermediateType>((static_cast<IntermediateType>(m_value) << (FractionBits + 1)) / y.m_value);
-				m_value = static_cast<BaseType>(detail::shift_right<true>(quotient, 1));
+				m_value = detail::narrow<BaseType>(detail::shift_right<true>(quotient, 1));
 			}
 			else
 			{
-				m_value = static_cast<BaseType>((static_cast<IntermediateType>(m_value) << FractionBits) / y.m_value);
+				m_value = detail::narrow<BaseType>(static_cast<IntermediateType>((static_cast<IntermediateType>(m_value) << FractionBits) / y.m_value));
 			}
 			return *this;
 		}
@@ -452,6 +574,12 @@ namespace fpm
 		inline constexpr fixed& operator/=(I y) noexcept
 		{
 			assert(y != 0);
+			if constexpr(detail::checked_overflow)
+			{
+				// (The quotients that do not fit: a negative one for an unsigned type, and the one of the lowest value by -1)
+				const auto quotient = detail::magnitude_of(m_value) / detail::magnitude_of(y);
+				detail::check_overflow(quotient == 0 || quotient <= detail::largest_magnitude<BaseType>(detail::is_negative(m_value) != detail::is_negative(y)));
+			}
 			m_value = detail::divide_by_integer(m_value, y);
 			return *this;
 		}
@@ -461,6 +589,16 @@ namespace fpm
 #pragma endregion
 
 	private:
+		/// Raw value of an integer that is an operand of an operator: see FPM_CHECK_OVERFLOW
+		template<std::integral T>
+		[[nodiscard]] inline static constexpr BaseType integral_to_raw_checked(const T val) noexcept
+		{
+			const BaseType raw = integral_to_raw(val);
+			if constexpr(detail::checked_overflow)
+				detail::check_overflow(detail::equals_integer<FractionBits>(raw, val));
+			return raw;
+		}
+
 		/// Raw value of an integer. Like static_cast, this truncates bits that don't fit (modular arithmetic, no overflow).
 		template<std::integral T>
 		[[nodiscard]] inline static constexpr BaseType integral_to_raw(const T val) noexcept
@@ -552,13 +690,11 @@ namespace fpm
 #pragma endregion
 
 	/// Negation. For unsigned base types the result wraps around, like negating an unsigned integer.
+	/// With FPM_DEFINED_OVERFLOW it does for the lowest value of a signed type as well (which is itself).
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator-(const fixed<B, I, F, R>& x) noexcept
 	{
-		if constexpr(std::is_signed_v<B>)
-			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(-x.raw_value()));
-		else
-			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(B{0} - x.raw_value()));
+		return fixed<B, I, F, R>::from_raw_value(detail::subtract(B{0}, x.raw_value()));
 	}
 
 #pragma region Arithmetic operators
@@ -566,21 +702,21 @@ namespace fpm
 #pragma region Addition
 
 	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator+(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator+(fixed<B, I, F, R> x, const fixed<B, I, F, R>& y) noexcept
 	{
-		return fixed<B, I, F, R>::from_raw_value(x.raw_value() + y.raw_value());
+		return x += y;
 	}
 
 	template<typename B, typename I, uint32_t F, bool R, std::integral T>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator+(const fixed<B, I, F, R>& x, T y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator+(fixed<B, I, F, R> x, T y) noexcept
 	{
-		return x + fixed<B, I, F, R>(y);
+		return x += y;
 	}
 
 	template<typename B, typename I, uint32_t F, bool R, std::integral T>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator+(T x, const fixed<B, I, F, R>& y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator+(T x, fixed<B, I, F, R> y) noexcept
 	{
-		return fixed<B, I, F, R>(x) + y;
+		return y += x;
 	}
 
 #pragma endregion
@@ -588,21 +724,23 @@ namespace fpm
 #pragma region Subtraction
 
 	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator-(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator-(fixed<B, I, F, R> x, const fixed<B, I, F, R>& y) noexcept
 	{
-		return fixed<B, I, F, R>::from_raw_value(x.raw_value() - y.raw_value());
+		return x -= y;
 	}
 
 	template<typename B, typename I, uint32_t F, bool R, std::integral T>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator-(const fixed<B, I, F, R>& x, T y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator-(fixed<B, I, F, R> x, T y) noexcept
 	{
-		return x - fixed<B, I, F, R>(y);
+		return x -= y;
 	}
 
 	template<typename B, typename I, uint32_t F, bool R, std::integral T>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator-(T x, const fixed<B, I, F, R>& y) noexcept
 	{
-		return fixed<B, I, F, R>(x) - y;
+		fixed<B, I, F, R> result{};
+		result += x;
+		return result -= y;
 	}
 
 #pragma endregion
@@ -645,7 +783,9 @@ namespace fpm
 	template<typename B, typename I, uint32_t F, std::integral T, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator/(T x, const fixed<B, I, F, R>& y) noexcept
 	{
-		return fixed<B, I, F, R>(x) / y;
+		fixed<B, I, F, R> result{};
+		result += x;
+		return result /= y;
 	}
 
 #pragma endregion
@@ -745,7 +885,9 @@ namespace std
 		static constexpr std::float_round_style round_style = R ? std::round_to_nearest : std::round_toward_zero;
 		static constexpr bool is_iec559 = false;
 		static constexpr bool is_bounded = true;
-		static constexpr bool is_modulo = std::numeric_limits<B>::is_modulo;
+
+		/// With FPM_DEFINED_OVERFLOW the results of the arithmetic operators wrap around for signed types as well
+		static constexpr bool is_modulo = fpm::detail::defined_overflow || std::numeric_limits<B>::is_modulo;
 		static constexpr int digits = std::numeric_limits<B>::digits;
 
 		// Any number with `digits10` significant base-10 digits is convertible from text and back without change.

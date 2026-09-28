@@ -99,8 +99,10 @@ TEST(arithmethic_int, division_unsigned_type)
 	EXPECT_EQ(P(0.5), P(3.5) / 7u);
 	EXPECT_EQ(P(20000), P(40000) / int8_t{2});
 
+#ifndef FPM_CHECK_OVERFLOW
 	// Negative results wrap, like the negation of an unsigned value
 	EXPECT_EQ(-P(0.5), P(3.5) / -7);
+#endif
 }
 
 TYPED_TEST(arithmethic_int, comparison)

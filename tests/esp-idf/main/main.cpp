@@ -13,6 +13,7 @@
 #include <fpm/fraction/math.hpp>
 
 #include <cstdio>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -26,10 +27,24 @@ namespace
 	static_assert(number{1} / 3 == number::from_raw_value(21845));
 	static_assert(sqrt(number{2}) == number::from_raw_value(92682));
 	static_assert(fpm::to_string(number{0.1}) == "0.1");
+#ifndef FPM_FRACTION_STRICT
 	static_assert(angle{1.25} == angle{0.25});
+#endif
 	static_assert(fpm::sin<number>(angle{0.25}) == number{1});
 	static_assert(fpm::atan2<angle>(number{1}, number{1}) == angle{0.125});
 	static_assert(fpm::difference(angle{0.125}, angle{0.875}).direction == fpm::direction::CounterClockwise);
+	static_assert(expm1(log1p(std::numeric_limits<number>::max())) > number{32767});
+
+#ifdef FPM_DEFINED_OVERFLOW
+	// The results that a type cannot represent
+	static_assert(abs(std::numeric_limits<number>::lowest()) == std::numeric_limits<number>::max());
+	static_assert(pow(number{-200}, 3) == std::numeric_limits<number>::lowest());
+	static_assert(ceil(std::numeric_limits<number>::max()) == std::numeric_limits<number>::max());
+#ifndef FPM_CHECK_OVERFLOW
+	static_assert(std::numeric_limits<number>::max() + number::from_raw_value(1) == std::numeric_limits<number>::lowest());
+	static_assert(number{200} * number{200} == number{40000 - 65536});
+#endif
+#endif
 
 	template<typename Number>
 	Number calculate(const Number x, const Number y)
@@ -37,6 +52,7 @@ namespace
 		return sin(x) + cos(y) + tan(x) + atan2(x, y) + atan(x) + sqrt(abs(x)) + cbrt(y) + hypot(x, y)
 			+ exp(x / 16) + exp2(y / 16) + log(abs(y) + 1) + log2(abs(x) + 1) + log10(abs(x) + 1) + pow(abs(x) + 1, y / 16) + pow(x, 3)
 			+ asin(x / 1000) + acos(y / 1000) + floor(x) + ceil(y) + round(x) + trunc(y) + fmod(x, y + 1000) + remainder(x, y + 1000)
+			+ expm1(x / 16) + log1p(abs(y)) + copysign(x, y) + nearbyint(y) + nextafter(x, y) + pow(x, y / 16 + 2) + pow(y + 2, -2)
 			+ x * y + x / (y + 1000) + x * 3 + y / 7u + Number{1.5f} + Number{2.5};
 	}
 
