@@ -18,11 +18,12 @@
 // Everything in this header uses integer arithmetic only.
 //
 // Differences from the floating-point versions, because a fraction is a number in [0, 1):
-// - `from_chars` reports `std::errc::result_out_of_range` for every number that is not in [0, 1): negative
-//   numbers, numbers of at least 1, and "inf", "infinity" and "nan".
-//   Text is not an operation of the type: it does not wrap around.
-// - Numbers are rounded to the nearest fraction, ties to even (like `std::from_chars`). That is never 1:
-//   numbers above the largest fraction give the largest fraction.
+// - `from_chars` gives the fraction of any number, like the other conversions to a fraction: "1.75" and "-0.25"
+//   give 0.75. With FPM_FRACTION_STRICT it reports `std::errc::result_out_of_range` for the numbers that are not
+//   in [0, 1) instead.
+// - Numbers are rounded to the nearest fraction, ties to even (like `std::from_chars`): a number that rounds up to 1
+//   gives 0.
+// - "inf", "infinity" and "nan" are not numbers: they give `std::errc::result_out_of_range`.
 
 namespace fpm
 {
@@ -90,14 +91,39 @@ namespace fpm
 			bool out_of_range = false;
 		};
 
+		/// The number of a text, after its sign: the digits with at most one decimal point, and the exponent
+		/// (decimal, or binary for hexadecimal digits)
+		struct number
+		{
+			const char* first;
+			const char* last;
+			int32_t exponent = 0;
+			bool hexadecimal = false;
+			bool negative = false;
+		};
+
 		/// Round a value to the grid of the fraction: to nearest, ties to even.
 		/// `half` is the bit right below the last bit, `rest` whether anything below it is non-zero.
+		/// Then the fraction of a negative number: 1 - value, modulo 1.
+		/// `not_zero`: the number (not only its fraction) is not zero.
 		template<typename B>
-		[[nodiscard]] constexpr conversion<B> finish(const B value, const bool half, const bool rest) noexcept
+		[[nodiscard]] constexpr conversion<B> finish(B value, const bool half, const bool rest, const bool negative, const bool integral, const bool not_zero) noexcept
 		{
-			// The largest fraction is not rounded up: to 1
-			if(half && (rest || (value & 1) != 0) && value != std::numeric_limits<B>::max())
-				return {static_cast<B>(value + 1), false};
+#ifdef FPM_FRACTION_STRICT
+			// Not in [0, 1)
+			if(integral || (negative && not_zero))
+				return {0, true};
+#else
+			static_cast<void>(integral);
+			static_cast<void>(not_zero);
+#endif
+			// The sum wraps around for a fraction that rounds up to 1. (With unsigned arithmetic: the small types
+			// are promoted to `int`.)
+			using U = std::make_unsigned_t<std::common_type_t<B, unsigned int>>;
+			if(half && (rest || (value & 1) != 0))
+				value = static_cast<B>(static_cast<U>(value) + 1u);
+			if(negative)
+				value = static_cast<B>(U{0} - static_cast<U>(value));
 			return {value, false};
 		}
 
@@ -133,34 +159,53 @@ namespace fpm
 			return p;
 		}();
 
-		/// Exact conversion of a decimal to a fraction, rounded to nearest (ties to even)
+		/// Exact conversion of the fraction of a decimal number, rounded to nearest (ties to even)
 		template<typename B>
-		[[nodiscard]] constexpr conversion<B> from_decimal(const decimal_for<B>& d) noexcept
+		[[nodiscard]] constexpr conversion<B> from_decimal(const number& text) noexcept
 		{
 			constexpr int32_t N = bits<B>;
-			if(d.count == 0)
-				return {0, false};
 
-			// Not zero: negative, or at least 1 (the first digit is not zero)
-			if(d.negative || d.exponent > 0)
-				return {0, true};
+			// The digits before the decimal point
+			int64_t before = 0;
+			bool seen_point = false;
+			for(const char* p = text.first; p != text.last; ++p)
+			{
+				if(*p == '.')
+					seen_point = true;
+				else if(!seen_point)
+					++before;
+			}
 
+			// The digits of the fraction: the ones after the decimal point of the number, with its exponent.
 			// Grid points need at most N fractional digits and the midpoints between them N+1,
 			// so the first N+1 digits plus a "non-zero digits follow" flag decide the rounding exactly.
 			constexpr int32_t frac_digits = N + 1;
 			std::array<uint8_t, frac_digits> frac{};
 			int32_t len = 0;
-			bool rest = d.sticky;
-			for(int32_t i = 0; i < d.count; ++i)
+			bool rest = false;
+			bool integral = false; // the number is 1 at least
+			bool not_zero = false;
+			int64_t position = -(before + text.exponent); // 0 for the first digit after the decimal point
+			for(const char* p = text.first; p != text.last; ++p)
 			{
-				const int32_t position = i - d.exponent; // 0-based fractional position
-				if(position >= frac_digits)
+				if(*p == '.')
+					continue;
+				const auto digit = static_cast<uint8_t>(*p - '0');
+				if(digit != 0)
 				{
-					rest = true; // non-zero, as there are no trailing zeros
-					break;
+					not_zero = true;
+					if(position < 0)
+						integral = true;
+					else if(position >= frac_digits)
+						rest = true;
 				}
-				frac[position] = d.digits[i];
-				len = position + 1;
+				if(position >= 0 && position < frac_digits)
+				{
+					frac[static_cast<std::size_t>(position)] = digit;
+					if(digit != 0)
+						len = static_cast<int32_t>(position) + 1;
+				}
+				++position;
 			}
 
 			// Fast path: with fraction = D / 10^L for the integer D of the first L digits, the bits are
@@ -172,11 +217,11 @@ namespace fpm
 				const int32_t length = len < max_length ? len : max_length;
 				bool tail = rest; // non-zero digits after the first `length`
 				for(int32_t i = length; i < len && !tail; ++i)
-					tail = frac[i] != 0;
+					tail = frac[static_cast<std::size_t>(i)] != 0;
 
 				W digits = 0;
 				for(int32_t i = 0; i < length; ++i)
-					digits = static_cast<W>(digits * 10 + frac[i]);
+					digits = static_cast<W>(digits * 10 + frac[static_cast<std::size_t>(i)]);
 				const W pow10 = powers_of_10<W, N>[static_cast<std::size_t>(length)];
 				const W numerator = static_cast<W>(digits << N);
 				const W quotient = numerator / pow10;
@@ -211,7 +256,7 @@ namespace fpm
 					}
 				}
 				if(decided) [[likely]]
-					return finish<B>(static_cast<B>(quotient), half, rest_below); // the quotient is below 2^N
+					return finish<B>(static_cast<B>(quotient), half, rest_below, text.negative, integral, not_zero); // the quotient is below 2^N
 			}
 
 			// Binary digits of the fraction. Digits beyond `len` are zero and stay zero when doubling.
@@ -220,34 +265,51 @@ namespace fpm
 				value = static_cast<B>(static_cast<B>(value << 1) | double_fraction(frac, len));
 			const bool half = double_fraction(frac, len) != 0;
 			for(int32_t i = 0; i < len && !rest; ++i)
-				rest = frac[i] != 0;
-			return finish<B>(value, half, rest);
+				rest = frac[static_cast<std::size_t>(i)] != 0;
+			return finish<B>(value, half, rest, text.negative, integral, not_zero);
 		}
 
-		/// Exact conversion of hexadecimal digits (value = 0.h[0]h[1]... * 2^exponent) to a fraction
+		/// Exact conversion of the fraction of a number with hexadecimal digits, rounded to nearest (ties to even)
 		template<typename B>
-		[[nodiscard]] constexpr conversion<B> from_hex_digits(const decimal_for<B>& d) noexcept
+		[[nodiscard]] constexpr conversion<B> from_hex_digits(const number& text) noexcept
 		{
 			constexpr int32_t N = bits<B>;
-			if(d.count == 0)
-				return {0, false};
-			if(d.negative)
-				return {0, true};
+
+			// The digits before the point
+			int64_t before = 0;
+			bool seen_point = false;
+			for(const char* p = text.first; p != text.last; ++p)
+			{
+				if(*p == '.')
+					seen_point = true;
+				else if(!seen_point)
+					++before;
+			}
 
 			// Every bit has a known position relative to the grid of the fraction
 			B value = 0;
 			bool half = false;
-			bool rest = d.sticky;
-			for(int32_t i = 0; i < d.count; ++i)
+			bool rest = false;
+			bool integral = false;
+			bool not_zero = false;
+			int64_t weight = 4 * before + text.exponent; // the first digit has the bits 2^(weight - 4) to 2^(weight - 1)
+			for(const char* p = text.first; p != text.last; ++p)
 			{
+				if(*p == '.')
+					continue;
+				weight -= 4;
+				const int32_t digit = digit_value(*p, 16);
+				if(digit == 0)
+					continue;
+				not_zero = true;
 				for(int32_t b = 0; b < 4; ++b)
 				{
-					if(((d.digits[i] >> b) & 1) == 0)
+					if(((digit >> b) & 1) == 0)
 						continue;
-					const int32_t position = d.exponent - 4 * (i + 1) + b + N;
+					const int64_t position = weight + b + N; // in the raw value
 					if(position >= N)
-						return {0, true}; // at least 1
-					if(position >= 0)
+						integral = true;
+					else if(position >= 0)
 						value = static_cast<B>(value | static_cast<B>(B{1} << position));
 					else if(position == -1)
 						half = true;
@@ -255,7 +317,7 @@ namespace fpm
 						rest = true;
 				}
 			}
-			return finish<B>(value, half, rest);
+			return finish<B>(value, half, rest, text.negative, integral, not_zero);
 		}
 
 		/// "%a" (without "0x") of `raw / 2^bits`; `precision < 0` means exact.
@@ -437,7 +499,7 @@ namespace fpm
 	/// - `fixed`: "%.{precision}f", `scientific`: "%.{precision}e",
 	/// - `general`: "%.{precision}g", `hex`: "%.{precision}a" without the "0x" prefix.
 	/// A negative precision behaves like the default of `printf`: 6, or the exact value for `hex`.
-	/// The digits are rounded, so a fraction close to 1 can give "1" (which `from_chars` does not accept).
+	/// The digits are rounded, so a fraction close to 1 can give "1" (which `from_chars` reads as 0).
 	template<typename B>
 	[[nodiscard]] constexpr std::to_chars_result to_chars(
 		char* first,
@@ -495,8 +557,9 @@ namespace fpm
 	/// no leading whitespace or '+', an optional '-', and no "0x" prefix for `hex`.
 	/// The exponent is forbidden for `fixed`, optional for `general` and `hex`, and required for `scientific`.
 	///
-	/// The result is exact, rounded to the nearest fraction (ties to even): the largest one for numbers above it.
-	/// Numbers that are not in [0, 1), as well as infinity and NaN, give `std::errc::result_out_of_range`.
+	/// The result is the fraction of the number (modulo 1: "1.75" and "-0.25" give 0.75), exactly rounded to the
+	/// nearest fraction (ties to even). With FPM_FRACTION_STRICT, numbers that are not in [0, 1) give
+	/// `std::errc::result_out_of_range` instead. So do infinity and NaN, always.
 	/// On any error, `value` is left unmodified.
 	template<typename B>
 	constexpr std::from_chars_result from_chars(
@@ -510,10 +573,10 @@ namespace fpm
 		using namespace detail::fraction_charconv;
 
 		const char* p = first;
-		decimal_for<B> d;
+		number text{};
 		if(p != last && *p == '-')
 		{
-			d.negative = true;
+			text.negative = true;
 			++p;
 		}
 
@@ -537,11 +600,11 @@ namespace fpm
 			return {end, std::errc::result_out_of_range};
 		}
 
-		const bool is_hex = fmt == std::chars_format::hex;
-		const int32_t base = is_hex ? 16 : 10;
-		const int32_t digit_scale = is_hex ? 4 : 1; // exponent change per digit (binary for hex, decimal otherwise)
+		text.hexadecimal = fmt == std::chars_format::hex;
+		const int32_t base = text.hexadecimal ? 16 : 10;
 
 		// Significand
+		text.first = p;
 		bool any_digit = false;
 		bool seen_point = false;
 		for(; p != last; ++p)
@@ -551,34 +614,34 @@ namespace fpm
 				seen_point = true;
 				continue;
 			}
-			const int32_t v = digit_value(*p, base);
-			if(v < 0)
+			if(digit_value(*p, base) < 0)
 				break;
 			any_digit = true;
-			add_digit(d, v, seen_point, digit_scale);
 		}
+		text.last = p;
 		if(!any_digit)
 			return {first, std::errc::invalid_argument};
 
 		// Exponent
-		const bool exponent_allowed = is_hex || (fmt & std::chars_format::scientific) == std::chars_format::scientific;
-		const bool exponent_required = !is_hex && (fmt & std::chars_format::fixed) != std::chars_format::fixed;
+		const bool exponent_allowed = text.hexadecimal || (fmt & std::chars_format::scientific) == std::chars_format::scientific;
+		const bool exponent_required = !text.hexadecimal && (fmt & std::chars_format::fixed) != std::chars_format::fixed;
 		bool has_exponent = false;
-		if(exponent_allowed && p != last && to_lower(*p) == (is_hex ? 'p' : 'e'))
+		if(exponent_allowed && p != last && to_lower(*p) == (text.hexadecimal ? 'p' : 'e'))
 		{
-			int32_t exponent = 0;
-			if(const char* end = parse_exponent(p + 1, last, exponent))
+			if(const char* end = parse_exponent(p + 1, last, text.exponent))
 			{
 				has_exponent = true;
 				p = end;
-				add_exponent(d, exponent);
+			}
+			else
+			{
+				text.exponent = 0;
 			}
 		}
 		if(exponent_required && !has_exponent)
 			return {first, std::errc::invalid_argument};
 
-		d.trim();
-		const auto c = is_hex ? from_hex_digits<B>(d) : from_decimal<B>(d);
+		const auto c = text.hexadecimal ? from_hex_digits<B>(text) : from_decimal<B>(text);
 		if(c.out_of_range)
 			return {p, std::errc::result_out_of_range};
 

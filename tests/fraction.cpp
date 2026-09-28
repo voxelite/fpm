@@ -1,8 +1,14 @@
 #include "common.hpp"
 #include <fpm/fraction.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <concepts>
+#include <functional>
+#include <map>
 #include <random>
+#include <set>
+#include <unordered_set>
 
 template<typename T>
 class fraction : public ::testing::Test
@@ -20,6 +26,13 @@ TYPED_TEST_SUITE(fraction, FractionTypes);
 
 namespace
 {
+	// With FPM_FRACTION_STRICT the numbers that are converted must be in [0, 1)
+#ifdef FPM_FRACTION_STRICT
+	constexpr bool strict = true;
+#else
+	constexpr bool strict = false;
+#endif
+
 	/// Raw values over the whole range: the edges, and random values of every magnitude
 	template<typename P>
 	std::vector<P> values()
@@ -231,47 +244,94 @@ TYPED_TEST(fraction, floating_point)
 		EXPECT_LE(static_cast<double>(x), 1.0);
 	}
 
-	// Rounded to nearest: within half a unit of the exact value, or a unit for the largest fraction
+	// Rounded to nearest: within half a unit of the exact value, modulo 1
 	std::mt19937_64 rng(7);
 	std::uniform_real_distribution<double> distribution(0.0, 1.0);
 	for(int i = 0; i < 10000; ++i)
 	{
 		// (Also close to 1)
 		const double value = std::min(i % 4 == 0 ? 1.0 - distribution(rng) / 300 : distribution(rng), std::nextafter(1.0, 0.0));
-		const P x{value};
-		const long double error = std::abs(exact(x) - static_cast<long double>(value));
-		const bool is_largest = x.raw_value() == std::numeric_limits<typename P::base_type>::max();
-		EXPECT_LE(error, std::ldexp(is_largest ? 1.0L : 0.5L, -static_cast<int>(P::fraction_bits))) << value;
+		long double error = std::abs(exact(P{value}) - static_cast<long double>(value));
+		if(error > 0.5L)
+			error = 1 - error;
+		EXPECT_LE(error, std::ldexp(0.5L, -static_cast<int>(P::fraction_bits))) << value;
 	}
 
-	// The largest values below 1 give the largest fraction (not 1): unless the fraction can represent them
+	// The largest values below 1 round up to 1, which wraps around to 0: unless the fraction can represent them
 	const auto largest = P::from_raw_value(std::numeric_limits<typename P::base_type>::max());
 	const double last_double = std::nextafter(1.0, 0.0);
 	const float last_float = std::nextafter(1.0f, 0.0f);
 	if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<double>::digits))
-		EXPECT_EQ(largest, P{last_double});
+		EXPECT_EQ(P{}, P{last_double});
 	else
 		EXPECT_EQ(static_cast<long double>(last_double), exact(P{last_double}));
 	if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<float>::digits))
-		EXPECT_EQ(largest, P{last_float});
+		EXPECT_EQ(P{}, P{last_float});
 	else
 		EXPECT_EQ(static_cast<long double>(last_float), exact(P{last_float}));
 
-	// Every number in [0, 1) gives the nearest fraction, in order
+	// The nearest fraction: also around the largest one, where that is 0 for the numbers closer to 1
 	if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<double>::digits))
 	{
 		const double unit = std::ldexp(1.0, -static_cast<int>(P::fraction_bits));
 		EXPECT_EQ(largest, P{1.0 - unit});
-		EXPECT_EQ(largest, P{1.0 - unit / 2});
-		EXPECT_EQ(largest, P{1.0 - unit / 4});
+		EXPECT_EQ(largest, P{1.0 - unit * 0.75});
 		EXPECT_EQ(largest, P{1.0 - unit * 1.25});
+		EXPECT_EQ(P{}, P{1.0 - unit / 2}); // halfway: upwards
+		EXPECT_EQ(P{}, P{1.0 - unit / 4});
 		EXPECT_EQ(P::from_raw_value(static_cast<typename P::base_type>(largest.raw_value() - 1)), P{1.0 - unit * 1.75});
 	}
 
+	if(strict)
+	{
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = P{1.0}, "");
-	EXPECT_DEATH(auto v = P{-0.25}, "");
+		EXPECT_DEATH(auto v = P{1.0}, "");
+		EXPECT_DEATH(auto v = P{-0.25}, "");
+		EXPECT_DEATH(auto v = P{1e30}, "");
 #endif
+	}
+	else
+	{
+		// The fraction of any number: modulo 1
+		EXPECT_EQ(P{}, P{1.0});
+		EXPECT_EQ(P{0.25}, P{1.25});
+		EXPECT_EQ(P{0.75}, P{-0.25});
+		EXPECT_EQ(P{0.75}, P{-0.25f});
+		EXPECT_EQ(P{0.5}, P{-1234567.5L});
+		EXPECT_EQ(P{0.5}, P{4398046511104.5}); // 2^42 + 0.5
+		EXPECT_EQ(P{0.75}, P{-4398046511104.25});
+		EXPECT_EQ(P{}, P{-0.0});
+		EXPECT_EQ(P{}, P{-1e-300}); // rounds up to 1
+		EXPECT_EQ(P{}, P{1e-300});
+		// Integers: also the ones that are too large for an integer type
+		EXPECT_EQ(P{}, P{9007199254740992.0});
+		EXPECT_EQ(P{}, P{-1e19});
+		EXPECT_EQ(P{}, P{1e30f});
+		EXPECT_EQ(P{}, P{std::numeric_limits<double>::max()});
+		EXPECT_EQ(P{}, P{std::numeric_limits<float>::lowest()});
+		EXPECT_EQ(P{}, P{std::numeric_limits<long double>::max()});
+		// The largest numbers with a fraction
+		EXPECT_EQ(P{0.5}, P{4503599627370495.5});    // 2^52 - 0.5
+		EXPECT_EQ(P{0.5}, P{-4503599627370495.5});
+		EXPECT_EQ(P{0.5}, P{8388607.5f});            // 2^23 - 0.5
+		EXPECT_EQ(P{0.5}, P{9223372036854775807.5L - 4611686018427387904.0L}); // 2^62 - 0.5, for 64 bits of precision
+
+#ifndef FPM_FRACTION_STRICT
+		static_assert(P{1.25} == P{0.25} && P{-0.25} == P{0.75} && P{1e30} == P{} && P{-3.0f} == P{});
+#endif
+
+		// Against exact arithmetic
+		std::uniform_real_distribution<double> wide(-1e6, 1e6);
+		for(int i = 0; i < 10000; ++i)
+		{
+			const double value = wide(rng);
+			const long double expected = static_cast<long double>(value) - std::floor(static_cast<long double>(value));
+			long double error = std::abs(exact(P{value}) - expected);
+			if(error > 0.5L)
+				error = 1 - error;
+			EXPECT_LE(error, std::ldexp(0.5L, -static_cast<int>(P::fraction_bits))) << value;
+		}
+	}
 }
 
 namespace
@@ -330,7 +390,7 @@ namespace
 					? std::floor(expected_fraction / step + 0.5L) * step
 					: std::floor(expected_fraction / step) * step;
 				if(expected >= 1)
-					expected = 1 - step; // the largest fraction
+					expected -= 1; // wraps around
 			}
 			ASSERT_EQ(expected, exact(P{Q::from_raw_value(raw)})) << "raw " << static_cast<long double>(raw);
 		}
@@ -405,4 +465,210 @@ TEST(fraction, angle)
 
 	const auto radians = fpm::fixed_16_16(angle) * fpm::fixed_16_16::two_pi();
 	EXPECT_EQ(fpm::fixed_16_16::half_pi(), radians);
+}
+
+TYPED_TEST(fraction, numeric_limits)
+{
+	using P = TypeParam;
+	using B = typename P::base_type;
+	using L = std::numeric_limits<P>;
+	const int bits = static_cast<int>(P::fraction_bits);
+
+	static_assert(L::is_specialized);
+	static_assert(!L::is_signed);
+	static_assert(!L::is_integer);
+	static_assert(L::is_exact);
+	static_assert(!L::has_infinity && !L::has_quiet_NaN && !L::has_signaling_NaN);
+	static_assert(L::is_bounded);
+	static_assert(L::is_modulo); // it wraps around
+	static_assert(L::round_style == std::round_to_nearest);
+	static_assert(L::radix == 2);
+	static_assert(L::max_exponent == 0 && L::max_exponent10 == 0);
+	EXPECT_EQ(bits, L::digits);
+	EXPECT_EQ(1 - bits, L::min_exponent);
+	EXPECT_EQ(static_cast<int>(std::floor(bits * std::log10(2.0L))), L::digits10);
+	EXPECT_EQ(static_cast<int>(std::ceil(bits * std::log10(2.0L))), L::max_digits10);
+	EXPECT_EQ(-L::digits10, L::min_exponent10);
+
+	static_assert(L::lowest() == P{});
+	static_assert(L::min() == P::from_raw_value(1));
+	static_assert(L::denorm_min() == P::from_raw_value(1));
+	static_assert(L::max() == P::from_raw_value(std::numeric_limits<B>::max()));
+	static_assert(L::epsilon() == P::from_raw_value(1));
+	static_assert(L::round_error() == P{0.5});
+
+	// It wraps around
+	EXPECT_EQ(L::lowest(), L::max() + L::epsilon());
+	EXPECT_EQ(L::max(), L::lowest() - L::epsilon());
+}
+
+TYPED_TEST(fraction, hash_and_order)
+{
+	using P = TypeParam;
+	const auto all = values<P>();
+
+	const std::hash<P> hash{};
+	for(const P x : all)
+	{
+		EXPECT_EQ(hash(x), hash(P::from_raw_value(x.raw_value())));
+		EXPECT_EQ(hash(x), std::hash<typename P::base_type>{}(x.raw_value()));
+	}
+	EXPECT_NE(hash(P{0.25}), hash(P{0.75}));
+
+	// The order of the values in [0, 1): std::less and the like use the operators
+	EXPECT_TRUE(std::less<P>{}(P{0.25}, P{0.75}));
+	EXPECT_FALSE(std::less<P>{}(P{0.75}, P{0.25}));
+	EXPECT_FALSE(std::less<P>{}(P{0.25}, P{0.25}));
+	EXPECT_TRUE(std::greater<P>{}(P{0.75}, P{0.25}));
+	EXPECT_TRUE(std::less_equal<P>{}(P{0.25}, P{0.25}));
+	EXPECT_TRUE(std::equal_to<P>{}(P{0.25}, P{0.25}));
+	EXPECT_TRUE(std::ranges::less{}(P{0.25}, P{0.75}));
+	static_assert(std::totally_ordered<P>);
+	static_assert(std::regular<P>);
+
+	const std::set<P> ordered(all.begin(), all.end());
+	const std::unordered_set<P> hashed(all.begin(), all.end());
+	EXPECT_EQ(ordered.size(), hashed.size());
+	EXPECT_TRUE(std::is_sorted(ordered.begin(), ordered.end()));
+	EXPECT_EQ(P{}, *ordered.begin());
+	for(const P x : all)
+	{
+		EXPECT_TRUE(ordered.contains(x));
+		EXPECT_TRUE(hashed.contains(x));
+	}
+
+	std::map<P, int> map;
+	map[P{0.5}] = 2;
+	map[P{0.25}] = 1;
+	map[P{0.75}] = 3;
+	EXPECT_EQ(1, map.begin()->second);
+	EXPECT_EQ(3, map.rbegin()->second);
+}
+
+// Between fractions: exact to more bits, rounded to nearest (modulo 1) to fewer
+TEST(fraction, other_bits)
+{
+	const auto check = []<typename From, typename To>()
+	{
+		using B = typename To::base_type;
+		constexpr int from = static_cast<int>(From::fraction_bits);
+		constexpr int to = static_cast<int>(To::fraction_bits);
+		for(const From x : values<From>())
+		{
+			const To y{x};
+			if constexpr(to > from)
+			{
+				ASSERT_EQ(static_cast<uint64_t>(x.raw_value()) << (to - from), static_cast<uint64_t>(y.raw_value()));
+				ASSERT_EQ(x, From{y}); // and back
+			}
+			else
+			{
+				// floor(x * 2^to + 1/2), modulo 2^to
+				constexpr int shift = (from > to) ? from - to : 1;
+				const auto expected = static_cast<B>(((static_cast<unsigned __int128>(x.raw_value()) + (static_cast<unsigned __int128>(1) << (shift - 1))) >> shift));
+				ASSERT_EQ(expected, y.raw_value()) << static_cast<uint64_t>(x.raw_value());
+			}
+		}
+		// Rounds up to 1: 0
+		if(to < from)
+			ASSERT_EQ(To{}, To{From::from_raw_value(std::numeric_limits<typename From::base_type>::max())});
+	};
+	const auto with = [&]<typename From>()
+	{
+		if(!std::is_same_v<From, fpm::fraction<uint8_t>>)
+			check.template operator()<From, fpm::fraction<uint8_t>>();
+		if(!std::is_same_v<From, fpm::fraction<uint16_t>>)
+			check.template operator()<From, fpm::fraction<uint16_t>>();
+		if(!std::is_same_v<From, fpm::fraction<uint32_t>>)
+			check.template operator()<From, fpm::fraction<uint32_t>>();
+		if(!std::is_same_v<From, fpm::fraction<uint64_t>>)
+			check.template operator()<From, fpm::fraction<uint64_t>>();
+	};
+	with.template operator()<fpm::fraction<uint8_t>>();
+	with.template operator()<fpm::fraction<uint16_t>>();
+	with.template operator()<fpm::fraction<uint32_t>>();
+	with.template operator()<fpm::fraction<uint64_t>>();
+
+	using narrow = fpm::fraction<uint8_t>;
+	using wide = fpm::fraction<uint16_t>;
+	static_assert(narrow{wide{0.25}} == narrow{0.25});
+	static_assert(wide{narrow{0.75}} == wide{0.75});
+	static_assert(narrow{wide::from_raw_value(0x017F)} == narrow::from_raw_value(1));
+	static_assert(narrow{wide::from_raw_value(0x0180)} == narrow::from_raw_value(2)); // halfway: upwards
+	static_assert(narrow{wide::from_raw_value(0xFF7F)} == narrow::from_raw_value(0xFF));
+	static_assert(narrow{wide::from_raw_value(0xFF80)} == narrow{});                  // rounds up to 1
+	static_assert(!std::is_convertible_v<wide, narrow> && !std::is_convertible_v<narrow, wide>); // explicit
+}
+
+TYPED_TEST(fraction, difference)
+{
+	using P = TypeParam;
+	using B = typename P::base_type;
+	using fpm::direction;
+	const auto half = static_cast<B>(B{1} << (P::fraction_bits - 1));
+	const auto all = values<P>();
+
+	for(const P x : all)
+	{
+		for(const P y : {all[0], all[1], all[3], all[4], all[5], all[6], all[50], all[100]})
+		{
+			const auto [distance, way] = fpm::difference(x, y);
+
+			// At most half a turn, and the rotation from y to x
+			ASSERT_LE(distance.raw_value(), half);
+			ASSERT_EQ(x, (way == direction::Clockwise) ? y - distance : y + distance);
+
+			// The shortest: the other way is not shorter
+			ASSERT_LE(distance, -distance == P{} ? distance : std::max(distance, -distance));
+			if(distance.raw_value() == half)
+				ASSERT_EQ(direction::CounterClockwise, way);
+
+			// The other way back, unless it is half a turn (or none)
+			const auto back = fpm::difference(y, x);
+			ASSERT_EQ(distance, back.distance);
+			if(distance.raw_value() != half && distance != P{})
+				ASSERT_NE(way, back.direction);
+
+			// The same for any rotation of both
+			ASSERT_EQ(fpm::difference(x, y), fpm::difference(x + all[7], y + all[7]));
+
+			// As a number
+			if constexpr(P::fraction_bits <= 16)
+			{
+				const auto number = static_cast<fpm::fixed_16_16>(fpm::difference(x, y));
+				const auto magnitude = static_cast<int32_t>(static_cast<uint32_t>(distance.raw_value()) << (16 - P::fraction_bits));
+				ASSERT_EQ((way == direction::Clockwise) ? -magnitude : magnitude, number.raw_value());
+				ASSERT_EQ(x, y + P{number});
+			}
+		}
+	}
+
+	EXPECT_EQ((fpm::rotation<B>{P{}, direction::CounterClockwise}), fpm::difference(P{0.25}, P{0.25}));
+	EXPECT_EQ((fpm::rotation<B>{P{0.25}, direction::CounterClockwise}), fpm::difference(P{0.5}, P{0.25}));
+	EXPECT_EQ((fpm::rotation<B>{P{0.25}, direction::Clockwise}), fpm::difference(P{0.25}, P{0.5}));
+	EXPECT_EQ((fpm::rotation<B>{P{0.25}, direction::CounterClockwise}), fpm::difference(P{0.125}, P{0.875})); // over 0
+	EXPECT_EQ((fpm::rotation<B>{P{0.25}, direction::Clockwise}), fpm::difference(P{0.875}, P{0.125}));
+	EXPECT_EQ((fpm::rotation<B>{P{0.5}, direction::CounterClockwise}), fpm::difference(P{0.75}, P{0.25}));
+	EXPECT_EQ((fpm::rotation<B>{P{0.5}, direction::CounterClockwise}), fpm::difference(P{0.25}, P{0.75}));
+
+	EXPECT_EQ(fpm::fixed_16_16{-0.25}, fpm::fixed_16_16(fpm::difference(P{0.875}, P{0.125})));
+	EXPECT_EQ(fpm::fixed_16_16{0.5}, fpm::fixed_16_16(fpm::difference(P{0.75}, P{0.25})));
+	EXPECT_EQ(fpm::fixed_8_8{0.25}, static_cast<fpm::fixed_8_8>(fpm::difference(P{0.5}, P{0.25})));
+
+	static_assert(fpm::difference(P{0.125}, P{0.875}).direction == direction::CounterClockwise);
+	static_assert(static_cast<int>(direction::CounterClockwise) == 0 && static_cast<int>(direction::Clockwise) == 1);
+
+	// Towards a target, by a limited step
+	P current{0.875};
+	const P target{0.125};
+	const P step{0.0625};
+	int steps = 0;
+	while(current != target && steps < 100)
+	{
+		const auto [distance, way] = fpm::difference(target, current);
+		const P move = std::min(distance, step);
+		current = (way == direction::Clockwise) ? current - move : current + move;
+		++steps;
+	}
+	EXPECT_EQ(4, steps); // over 0, not the long way around
 }

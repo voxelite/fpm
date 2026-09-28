@@ -25,6 +25,13 @@ TYPED_TEST_SUITE(fraction_charconv, FractionTypes);
 
 namespace
 {
+	// With FPM_FRACTION_STRICT the numbers that are converted must be in [0, 1)
+#ifdef FPM_FRACTION_STRICT
+	constexpr bool strict = true;
+#else
+	constexpr bool strict = false;
+#endif
+
 	/// Raw values over the whole range: the edges, and random values of every magnitude
 	template<typename P>
 	std::vector<P> values(const int count = 2000)
@@ -131,15 +138,19 @@ namespace
 	}());
 	static_assert([]
 	{
-		fpm::fraction<uint64_t> value{};
-		const std::string_view text = "1.0";
-		return fpm::from_chars(text.data(), text.data() + text.size(), value).ec == std::errc::result_out_of_range;
+		fpm::fraction<uint64_t> value{0.5};
+		const std::string_view text = "-1.25";
+		const auto result = fpm::from_chars(text.data(), text.data() + text.size(), value);
+		return strict
+			? (result.ec == std::errc::result_out_of_range && value == fpm::fraction<uint64_t>{0.5})
+			: (result.ec == std::errc{} && value == fpm::fraction<uint64_t>{0.75});
 	}());
 	static_assert([]
 	{
-		fpm::fraction<uint8_t> value{};
+		// Rounds up to 1
+		fpm::fraction<uint8_t> value{0.5};
 		const std::string_view text = "0.999";
-		return fpm::from_chars(text.data(), text.data() + text.size(), value).ec == std::errc{} && value.raw_value() == 255;
+		return fpm::from_chars(text.data(), text.data() + text.size(), value).ec == std::errc{} && value.raw_value() == 0;
 	}());
 }
 
@@ -227,35 +238,85 @@ TYPED_TEST(fraction_charconv, examples)
 	EXPECT_EQ(std::errc::invalid_argument, parse("0.5", value, std::chars_format::scientific).ec);
 }
 
-TYPED_TEST(fraction_charconv, out_of_range)
+namespace
+{
+	/// A number that is not in [0, 1): its fraction, or out of range if that is checked
+	template<typename P>
+	::testing::AssertionResult wraps_to(const std::string_view text, const P expected, const std::chars_format fmt = std::chars_format::general)
+	{
+		return strict ? out_of_range<P>(text, fmt) : parses_as(text, expected, fmt);
+	}
+}
+
+// The fraction of any number (modulo 1), or out of range with FPM_FRACTION_STRICT
+TYPED_TEST(fraction_charconv, not_in_range)
 {
 	using P = TypeParam;
 
 	// At least 1
-	EXPECT_TRUE(out_of_range<P>("1"));
-	EXPECT_TRUE(out_of_range<P>("1.0"));
-	EXPECT_TRUE(out_of_range<P>("1.25"));
-	EXPECT_TRUE(out_of_range<P>("001"));
-	EXPECT_TRUE(out_of_range<P>("2"));
-	EXPECT_TRUE(out_of_range<P>("1e0"));
-	EXPECT_TRUE(out_of_range<P>("10e-1"));
-	EXPECT_TRUE(out_of_range<P>("0.1e1"));
-	EXPECT_TRUE(out_of_range<P>("0.5e1"));
-	EXPECT_TRUE(out_of_range<P>("1e100"));
-	EXPECT_TRUE(out_of_range<P>("1e2000000000"));
-	EXPECT_TRUE(out_of_range<P>("123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"));
-	EXPECT_TRUE(out_of_range<P>("1", std::chars_format::hex));
-	EXPECT_TRUE(out_of_range<P>("0.8p1", std::chars_format::hex));
-	EXPECT_TRUE(out_of_range<P>("1p100", std::chars_format::hex));
+	EXPECT_TRUE(wraps_to("1", P{}));
+	EXPECT_TRUE(wraps_to("1.0", P{}));
+	EXPECT_TRUE(wraps_to("1.25", P{0.25}));
+	{
+		// The same digits after the decimal point: the same fraction
+		P tenth{};
+		ASSERT_EQ(std::errc{}, parse("0.1", tenth).ec);
+		EXPECT_TRUE(wraps_to("1.1", tenth));
+		EXPECT_TRUE(wraps_to("77.1", tenth));
+		EXPECT_TRUE(wraps_to("-0.9", tenth));
+		EXPECT_TRUE(wraps_to("-5.9", tenth));
+	}
+	EXPECT_TRUE(wraps_to("001", P{}));
+	EXPECT_TRUE(wraps_to("2.5", P{0.5}));
+	EXPECT_TRUE(wraps_to("1e0", P{}));
+	EXPECT_TRUE(wraps_to("10e-1", P{}));
+	EXPECT_TRUE(wraps_to("0.1e1", P{}));
+	EXPECT_TRUE(wraps_to("0.5e1", P{}));
+	EXPECT_TRUE(wraps_to("0.525e1", P{0.25}));
+	EXPECT_TRUE(wraps_to("1275e-2", P{0.75}));
+	EXPECT_TRUE(wraps_to("0.00012375e5", P{0.375}));
+	EXPECT_TRUE(wraps_to("1e100", P{}));
+	EXPECT_TRUE(wraps_to("1e2000000000", P{}));
+	EXPECT_TRUE(wraps_to("1.5e2000000000", P{}));
+	EXPECT_TRUE(wraps_to("123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890", P{}));
+	EXPECT_TRUE(wraps_to("123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890.625", P{0.625}));
+	EXPECT_TRUE(wraps_to("123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890625e-3", P{0.625}));
+	EXPECT_TRUE(wraps_to(std::string(3000, '7') + ".5", P{0.5}));
+	EXPECT_TRUE(wraps_to("1", P{}, std::chars_format::hex));
+	EXPECT_TRUE(wraps_to("0.8p1", P{}, std::chars_format::hex));
+	EXPECT_TRUE(wraps_to("0.cp1", P{0.5}, std::chars_format::hex));
+	EXPECT_TRUE(wraps_to("3.4", P{0.25}, std::chars_format::hex));
+	EXPECT_TRUE(wraps_to("ffffffffffffffffffffffff.8", P{0.5}, std::chars_format::hex));
+	EXPECT_TRUE(wraps_to("1p100", P{}, std::chars_format::hex));
+	EXPECT_TRUE(wraps_to("1.8p2000000000", P{}, std::chars_format::hex));
+	EXPECT_TRUE(wraps_to("1.25", P{0.25}, std::chars_format::fixed));
+	EXPECT_TRUE(wraps_to("1.25e0", P{0.25}, std::chars_format::scientific));
 
-	// Negative
-	EXPECT_TRUE(out_of_range<P>("-0.25"));
-	EXPECT_TRUE(out_of_range<P>("-1"));
-	EXPECT_TRUE(out_of_range<P>("-1e-100"));
-	EXPECT_TRUE(out_of_range<P>("-0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"));
-	EXPECT_TRUE(out_of_range<P>("-1p-100", std::chars_format::hex));
+	// Negative: -0.25 is a quarter before 1
+	EXPECT_TRUE(wraps_to("-0.25", P{0.75}));
+	EXPECT_TRUE(wraps_to("-0.75", P{0.25}));
+	EXPECT_TRUE(wraps_to("-1", P{}));
+	EXPECT_TRUE(wraps_to("-1.75", P{0.25}));
+	EXPECT_TRUE(wraps_to("-12345.5", P{0.5}));
+	EXPECT_TRUE(wraps_to("-2.5e-1", P{0.75}));
+	EXPECT_TRUE(wraps_to("-1e-100", P{})); // rounds up to 1
+	EXPECT_TRUE(wraps_to("-0." + std::string(90, '0') + "1", P{}));
+	EXPECT_TRUE(wraps_to("-0.4", P{0.75}, std::chars_format::hex));
+	EXPECT_TRUE(wraps_to("-1p-100", P{}, std::chars_format::hex));
+	EXPECT_EQ(P{0.75}, -P{0.25}); // like the negative fraction
 
-	// Not a number in [0, 1)
+	// Zero is in the range, with any sign and exponent
+	EXPECT_TRUE(parses_as("-0", P{}));
+	EXPECT_TRUE(parses_as("-0.000e5", P{}));
+	EXPECT_TRUE(parses_as("000.000e-5", P{}));
+	EXPECT_TRUE(parses_as("-0p9", P{}, std::chars_format::hex));
+
+	// In the range, with an exponent
+	EXPECT_TRUE(parses_as("2.5e-1", P{0.25}));
+	EXPECT_TRUE(parses_as("0.0075e2", P{0.75}));
+	EXPECT_TRUE(parses_as("000000000000000000000000000000000000000000000000000000.5", P{0.5}));
+
+	// Not a number: always
 	EXPECT_TRUE(out_of_range<P>("inf"));
 	EXPECT_TRUE(out_of_range<P>("-inf"));
 	EXPECT_TRUE(out_of_range<P>("INFINITY"));
@@ -263,25 +324,22 @@ TYPED_TEST(fraction_charconv, out_of_range)
 	EXPECT_TRUE(out_of_range<P>("NaN(abc)"));
 }
 
-// Numbers above the largest fraction are in [0, 1): they give the largest fraction, not 1
-TYPED_TEST(fraction_charconv, largest)
+// Numbers in [0, 1) that round up to 1 give 0: also with FPM_FRACTION_STRICT
+TYPED_TEST(fraction_charconv, rounds_up_to_one)
 {
 	using P = TypeParam;
 	const auto largest = P::from_raw_value(std::numeric_limits<typename P::base_type>::max());
 
-	EXPECT_TRUE(parses_as("0.99999999999999999999999999999999999999", largest));
-	EXPECT_TRUE(parses_as("0." + std::string(500, '9'), largest));
-	EXPECT_TRUE(parses_as("9.9999999999999999999999999999999999999e-1", largest));
-	EXPECT_TRUE(parses_as("0.ffffffffffffffffffffffff", largest, std::chars_format::hex));
-	EXPECT_TRUE(parses_as("f.fffffffffffffffffffffffp-4", largest, std::chars_format::hex));
+	EXPECT_TRUE(parses_as("0.99999999999999999999999999999999999999", P{}));
+	EXPECT_TRUE(parses_as("0." + std::string(500, '9'), P{}));
+	EXPECT_TRUE(parses_as("9.9999999999999999999999999999999999999e-1", P{}));
+	EXPECT_TRUE(parses_as("0.ffffffffffffffffffffffff", P{}, std::chars_format::hex));
+	EXPECT_TRUE(parses_as("f.fffffffffffffffffffffffp-4", P{}, std::chars_format::hex));
+
+	// The largest fraction itself
 	EXPECT_TRUE(parses_as(to_chars_string(largest), largest));
 	EXPECT_TRUE(parses_as(to_chars_string(largest, std::chars_format::fixed, 80), largest));
-
-	// 1 is not
-	EXPECT_TRUE(out_of_range<P>("1"));
-	EXPECT_TRUE(out_of_range<P>("1.000000000000000000000000000000000000000000000000000000000000000000000000000000"));
-	EXPECT_TRUE(out_of_range<P>("1.000000000000000000000000000000000000000000000000000000000000000000000000000001"));
-	EXPECT_TRUE(out_of_range<P>("1p0", std::chars_format::hex));
+	EXPECT_TRUE(parses_as(to_chars_string(largest, std::chars_format::hex), largest, std::chars_format::hex));
 }
 
 TYPED_TEST(fraction_charconv, round_trip)
@@ -386,11 +444,11 @@ TYPED_TEST(fraction_charconv, rounds_to_nearest_even)
 		ASSERT_TRUE(parses_as(below + "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999", x));
 	}
 
-	// The midpoint below 1, and beyond: the largest fraction
+	// The midpoint below 1, and beyond: up to 1, which is 0 (and even)
 	const auto last = P::from_raw_value(std::numeric_limits<B>::max());
 	const auto midpoint = exact_decimal((static_cast<unsigned __int128>(last.raw_value()) << 1) | 1, bits + 1);
-	EXPECT_TRUE(parses_as(midpoint, last));
-	EXPECT_TRUE(parses_as(midpoint + "1", last));
+	EXPECT_TRUE(parses_as(midpoint, P{}));
+	EXPECT_TRUE(parses_as(midpoint + "1", P{}));
 	auto below = midpoint;
 	below.back() = '4';
 	EXPECT_TRUE(parses_as(below, last));
@@ -511,10 +569,17 @@ namespace
 			Q expected{};
 			const auto reference = fpm::from_chars(digits.data(), digits.data() + digits.size(), expected);
 			ASSERT_EQ(std::errc{}, reference.ec) << digits;
-			if(expected == Q{1})
-				ASSERT_TRUE(parses_as(digits, P::from_raw_value(std::numeric_limits<B>::max()))) << digits; // not rounded up to 1
-			else
-				ASSERT_TRUE(parses_as(digits, P{expected})) << digits;
+			// (1 for a number that rounds up to it: that is 0)
+			ASSERT_TRUE(parses_as(digits, P{expected})) << digits;
+
+			// With an integral part and a sign: its fraction
+			if(!strict && std::is_signed_v<typename Q::base_type> && Q::integral_bits > 8 && digits.find('e') == std::string::npos)
+			{
+				const std::string number = ((rng() % 2 == 0) ? "-" : "") + std::to_string(rng() % 100) + digits.substr(digits.find('.'));
+				const auto whole = fpm::from_chars(number.data(), number.data() + number.size(), expected);
+				ASSERT_EQ(std::errc{}, whole.ec) << number;
+				ASSERT_TRUE(parses_as(number, P{expected})) << number;
+			}
 		}
 	}
 }
@@ -527,4 +592,41 @@ TEST(fraction_charconv, like_fixed)
 #ifdef FPM_INT128
 	compare_with_fixed<fpm::fraction<uint32_t>, fpm::fixed_32_32>();
 #endif
+}
+
+// std::numeric_limits<fraction>::digits10: numbers with that many decimal places are read and written without change
+TYPED_TEST(fraction_charconv, digits10)
+{
+	using P = TypeParam;
+	const int digits = std::numeric_limits<P>::digits10;
+	ASSERT_GE(digits, 2);
+
+	uint64_t count = 1;
+	for(int i = 0; i < digits; ++i)
+		count *= 10;
+	std::mt19937_64 rng(10);
+	const bool all = count <= 100000;
+	for(uint64_t i = 0; i < (all ? count : 100000); ++i)
+	{
+		// Every number, or random ones and the largest ones
+		const uint64_t number = all ? i : (i < 1000 ? count - 1 - i : rng() % count);
+		auto text = std::to_string(number);
+		text = "0." + std::string(static_cast<std::size_t>(digits) - text.size(), '0') + text;
+
+		P value{};
+		ASSERT_EQ(std::errc{}, parse(text, value).ec) << text;
+		ASSERT_EQ(text, to_chars_string(value, std::chars_format::fixed, digits));
+	}
+
+	// Not with one more
+	bool changed = false;
+	for(uint64_t number = 0; number < 20000 && !changed; ++number)
+	{
+		auto text = std::to_string(number);
+		text = "0." + std::string(static_cast<std::size_t>(digits) + 1 - text.size(), '0') + text;
+		P value{};
+		ASSERT_EQ(std::errc{}, parse(text, value).ec) << text;
+		changed = text != to_chars_string(value, std::chars_format::fixed, digits + 1);
+	}
+	EXPECT_TRUE(changed);
 }

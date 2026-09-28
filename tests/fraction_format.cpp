@@ -28,6 +28,13 @@ TYPED_TEST_SUITE(fraction_format, FractionTypes);
 
 namespace
 {
+	// With FPM_FRACTION_STRICT the numbers that are converted must be in [0, 1)
+#ifdef FPM_FRACTION_STRICT
+	constexpr bool strict = true;
+#else
+	constexpr bool strict = false;
+#endif
+
 	template<typename P>
 	std::vector<P> values(const int count = 300)
 	{
@@ -278,7 +285,7 @@ TYPED_TEST(fraction_format, input)
 		EXPECT_EQ(value, result.value) << text;
 		EXPECT_EQ(rest, result.rest) << text;
 	};
-	// A number that is out of range: the nearest value is stored, and the extraction fails
+	// A number that is rejected: the nearest value is stored, and the extraction fails
 	const auto expect_out_of_range = [](const std::string& text, const P value, const std::string& rest = "")
 	{
 		const auto result = read<P>(text);
@@ -308,22 +315,36 @@ TYPED_TEST(fraction_format, input)
 	expect("0.5 0.25", P{0.5}, "");
 	expect("0.5abc", P{0.5}, "abc");
 	expect("0.5.25", P{0.5}, ".25");
-	expect("0.9999999999999999999999999999999999999999", last); // not rounded up to 1
+	expect("0.9999999999999999999999999999999999999999", P{}); // rounds up to 1
 
-	expect_out_of_range("1", last);
-	expect_out_of_range("1.0", last);
-	expect_out_of_range("1.25", last);
-	expect_out_of_range("+2", last);
-	expect_out_of_range("1e100", last);
-	expect_out_of_range("0.5e1", last);
-	expect_out_of_range("0x1p0", last);
-	expect_out_of_range("-0.25", P{});
-	expect_out_of_range("-1", P{});
-	expect_out_of_range("-1e-100", P{});
+	// Not in [0, 1): the fraction of the number (modulo 1), or rejected if that is checked
+	const auto expect_wrapped = [&](const std::string& text, const P value, const P nearest, const std::string& rest = "")
+	{
+		if(strict)
+			expect_out_of_range(text, nearest, rest);
+		else
+			expect(text, value, rest);
+	};
+	expect_wrapped("1", P{}, last);
+	expect_wrapped("1.0", P{}, last);
+	expect_wrapped("1.25", P{0.25}, last);
+	expect_wrapped("+2.5", P{0.5}, last);
+	expect_wrapped("1e100", P{}, last);
+	expect_wrapped("0.525e1", P{0.25}, last);
+	expect_wrapped("1275e-2", P{0.75}, last);
+	expect_wrapped("0x1p0", P{}, last);
+	expect_wrapped("0x3.4", P{0.25}, last);
+	expect_wrapped("123456789012345678901234567890123456789012345678901234567890.625", P{0.625}, last);
+	expect_wrapped("-0.25", P{0.75}, P{});
+	expect_wrapped("-1", P{}, P{});
+	expect_wrapped("-12.5", P{0.5}, P{});
+	expect_wrapped("-1e-100", P{}, P{});
+	expect_wrapped("1.5x", P{0.5}, last, "x");
+
+	// Not a number
 	expect_out_of_range("inf", last);
 	expect_out_of_range("+infinity", last);
 	expect_out_of_range("-inf", P{});
-	expect_out_of_range("1.5x", last, "x");
 
 	expect_invalid("");
 	expect_invalid("abc");

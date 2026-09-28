@@ -71,13 +71,36 @@ a += angle { 0.5 };                         // wraps around: 0.25
 auto radians = fpm::fixed_16_16(a) * fpm::fixed_16_16::two_pi();
 ```
 It is meant to store such values, not to calculate with them.
-* A fraction wraps around (modulo 1) instead of overflowing, for all its operations.
+* A fraction wraps around (modulo 1) instead of overflowing, for all its operations: `-angle { 0.25 }` is 0.75.
 * It supports `+`, `-` and negation, `*` and `/` by an integer, and comparisons (of the values in [0, 1)).
-* It converts explicitly to and from floating-point types and `fpm::fixed` types. The conversion from a fixed-point number takes its fraction
-  (so -0.25 becomes 0.75); the conversion from a floating-point number requires a number in [0, 1).
-* A number that is converted to a fraction (also from text) is rounded to the nearest fraction. That is never 1:
-  numbers above the largest fraction, like 0.9999 for 8 bits, give the largest fraction.
+* It converts explicitly to and from floating-point types, `fpm::fixed` types and fractions with another number of bits.
 * For anything else, convert it to a `fpm::fixed` type (with parentheses, as in the example).
+* It has specializations of `std::hash` and `std::numeric_limits`, and an order (of the values in [0, 1)) for `std::less`, `std::set` and the like.
+  `is_modulo` is true, as it wraps around; `digits10` are the decimal places that are read and written without change.
+
+### Conversions to a fraction
+The conversion of a number to a fraction is modulo 1 as well, from any type and from text:
+* It gives the fraction of the number: 1.75 and -0.25 both give 0.75.
+  So an angle can be moved by any number: `a += angle(velocity * delta)` works for a negative velocity, and for more than a turn.
+* It is rounded to the nearest fraction. A number that rounds up to 1 gives 0, like 0.9999 for 8 bits: the error is half a unit at most, for every number.
+* The conversion from a fraction with fewer bits is exact.
+
+Define `FPM_FRACTION_STRICT` (or set the CMake option of that name) to check the numbers that come from a floating-point number or from text:
+a number that is not in [0, 1) is an error then, instead of the fraction of it.
+`from_chars` reports `std::errc::result_out_of_range` for it, streams set their `failbit`, and the conversion from a floating-point number asserts.
+Conversions from `fpm::fixed` types and between fractions are not checked, and neither are numbers in [0, 1) that round up to 1.
+The option changes what the functions of the library do, so define it for all of a program.
+
+### Difference
+A fraction has no direction: `a - b` is the rotation from `b` to `a` counterclockwise, which can be almost a full turn.
+`fpm::difference(a, b)` gives the shortest rotation from `b` to `a`, as a distance of at most half a turn and its direction:
+```c++
+const auto [distance, way] = fpm::difference(target, current);
+const auto step = std::min(distance, limit);
+current = (way == fpm::direction::Clockwise) ? current - step : current + step;
+```
+* `fpm::direction` is `CounterClockwise` (the angle increases) or `Clockwise`. For angles that are half a turn apart it is `CounterClockwise`.
+* The result converts explicitly to a `fpm::fixed` type: a number in [-1/2, 1/2], negative for clockwise.
 
 ### Angles
 The header `<fpm/fraction/math.hpp>` provides the trigonometry for angles that are stored as a fraction of a turn (so 1/4 is a right angle).
@@ -108,9 +131,8 @@ angle back = fpm::atan2<angle>(y, x);              // 0.125
 Fractions have their own conversions to and from text, which behave like the ones for `fpm::fixed`:
 `fpm::to_chars`, `fpm::from_chars` and `fpm::to_string` in `<fpm/fraction/charconv.hpp>`, `std::format` support in `<fpm/fraction/format.hpp>`,
 and the stream operators in `<fpm/fraction/ios.hpp>`.
-* Text does not wrap around: a number that is not in [0, 1) is out of range. That includes negative numbers and 1.
-  `from_chars` reports `std::errc::result_out_of_range` and leaves the value unmodified;
-  a stream stores the nearest value (0 or the largest fraction) and sets its `failbit`.
+* Text is converted like any other number: "1.75" and "-0.25" give 0.75, and "0.9999" gives 0 for 8 bits. See [the conversions](#conversions-to-a-fraction),
+  also for the option to check the numbers instead. "inf" and "nan" are not numbers: they are always an error.
 * Digits are rounded when a precision is given, so a fraction close to 1 can be printed as `1.00`.
   Without a precision, the text is the shortest that reads back as the same fraction.
 

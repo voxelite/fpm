@@ -11,6 +11,13 @@ target_include_directories(fpm INTERFACE include)
 
 install(DIRECTORY include/fpm DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
+# Numbers that are converted to a fpm::fraction (from a floating-point number or from text) must be in [0, 1):
+# an error, instead of the fraction of the number. For all the targets that use fpm, so they agree.
+option(FPM_FRACTION_STRICT "Numbers that are converted to a fpm::fraction must be in [0, 1)" OFF)
+if(FPM_FRACTION_STRICT)
+  target_compile_definitions(fpm INTERFACE FPM_FRACTION_STRICT)
+endif()
+
 # Tests, benchmarks and the accuracy tool are only built by default if this is the top-level project
 option(FPM_BUILD_ACCURACY  "Build the fpm accuracy tool" ${PROJECT_IS_TOP_LEVEL})
 option(FPM_BUILD_BENCHMARK "Build the fpm benchmarks"    ${PROJECT_IS_TOP_LEVEL})

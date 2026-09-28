@@ -231,8 +231,9 @@ namespace fpm
 		return os;
 	}
 
-	/// Reads like a floating-point number. A number that is not in [0, 1) stores the nearest value (0 or the largest
-	/// fraction) and fails, like a number that is out of range for the built-in types.
+	/// Reads like a floating-point number, and gives the fraction of it (modulo 1: "1.75" and "-0.25" give 0.75).
+	/// With FPM_FRACTION_STRICT a number that is not in [0, 1) stores the nearest value (0 or the largest fraction)
+	/// and fails instead, like a number that is out of range for the built-in types. So does infinity, always.
 	template<typename CharT, class Traits, typename B>
 	std::basic_istream<CharT, Traits>& operator>>(std::basic_istream<CharT, Traits>& is, fraction<B>& x)
 	{
@@ -331,9 +332,9 @@ namespace fpm
 			return is;
 		}
 
-		// Collect the digits and let the exact conversion of `fpm::from_chars` convert them (no allocations)
-		detail::fraction_charconv::decimal_for<B> digits;
-		digits.negative = negate;
+		// Collect the digits and let the exact conversion of `fpm::from_chars` convert them.
+		// All of them: which ones are the fraction is known with the exponent only.
+		std::string significand;
 
 		char exponent_char = 'e';
 		bool hex = false;
@@ -351,10 +352,10 @@ namespace fpm
 			else
 			{
 				any_digit = true; // a leading zero
+				significand.push_back('0');
 			}
 		}
 		const int32_t base = hex ? 16 : 10;
-		const int32_t digit_scale = hex ? 4 : 1;
 
 		// Parse the significand
 		thousands_separator_allowed = true;
@@ -370,13 +371,13 @@ namespace fpm
 				}
 				seen_point = true;
 				thousands_separator_allowed = false;
+				significand.push_back('.');
 			}
 			else
 			{
-				const int32_t value = detail::charconv::digit_value(ch, base);
-				if(value < 0)
+				if(detail::charconv::digit_value(ch, base) < 0)
 					break;
-				detail::charconv::add_digit(digits, value, seen_point, digit_scale);
+				significand.push_back(ch);
 				any_digit = true;
 			}
 		}
@@ -389,6 +390,7 @@ namespace fpm
 		thousands_separator_allowed = false;
 
 		// Parse the exponent
+		int32_t exponent = 0;
 		if(std::tolower(static_cast<unsigned char>(ch)) == exponent_char)
 		{
 			ch = next();
@@ -400,10 +402,9 @@ namespace fpm
 			}
 
 			bool parsed = false;
-			int32_t exponent = 0;
 			while(ch >= '0' && ch <= '9')
 			{
-				if(exponent < detail::charconv::exponent_limit) // saturate: huge exponents give 0 or overflow either way
+				if(exponent < detail::charconv::exponent_limit) // saturate: huge exponents give 0 either way
 					exponent = exponent * 10 + (ch - '0');
 				parsed = true;
 				ch = next();
@@ -414,17 +415,19 @@ namespace fpm
 				is.setstate(std::ios::failbit);
 				return is;
 			}
-			detail::charconv::add_exponent(digits, exponent_negate ? -exponent : exponent);
+			if(exponent_negate)
+				exponent = -exponent;
 		}
 
 		// We've parsed all we need. Construct the value.
-		digits.trim();
+		const detail::fraction_charconv::number text{significand.data(), significand.data() + significand.size(), exponent, hex, negate};
 		const auto converted = hex
-			? detail::fraction_charconv::from_hex_digits<B>(digits)
-			: detail::fraction_charconv::from_decimal<B>(digits);
+			? detail::fraction_charconv::from_hex_digits<B>(text)
+			: detail::fraction_charconv::from_decimal<B>(text);
 		if(converted.out_of_range)
 		{
-			// Out of range: like for the built-in types, the nearest value is stored and the extraction fails
+			// Not in [0, 1), which is checked: like a number that is out of range for the built-in types,
+			// the nearest value is stored and the extraction fails
 			x = fraction<B>::from_raw_value(negate ? B{0} : std::numeric_limits<B>::max());
 			is.setstate(std::ios::failbit);
 		}
