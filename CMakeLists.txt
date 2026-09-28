@@ -147,6 +147,7 @@ if(FPM_BUILD_BENCHMARK)
       benchmarks/power.cpp
       benchmarks/to_float.cpp
       benchmarks/trigonometry.cpp
+      benchmarks/fraction.cpp # the last one: the columns of the results are in the order of the files
   )
   target_link_libraries(fpm-benchmark PRIVATE fpm libfixmath libcnl benchmark benchmark_main)
 endif()
@@ -158,6 +159,7 @@ if(FPM_BUILD_ACCURACY)
   #
   add_executable(fpm-accuracy
       accuracy/accuracy.cpp
+      accuracy/fraction.cpp
   )
   target_link_libraries(fpm-accuracy PRIVATE fpm libfixmath)
 endif()
@@ -171,7 +173,9 @@ if(GNUPLOT_FOUND AND FPM_BUILD_ACCURACY)
   # Create accuracy data
   set(DATA_FILES_ACCURACY "")
   set(IMG_FILES_ACCURACY "")
-  foreach(DATA sin-trig cos-trig tan-trig asin-invtrig acos-invtrig atan-invtrig atan2-trig sqrt-auto cbrt-auto pow-auto exp-auto exp2-auto log-auto log2-auto log10-auto)
+  # (The ones with "_turns" are for angles that are stored as a fraction of a turn)
+  foreach(DATA sin-trig cos-trig tan-trig asin-invtrig acos-invtrig atan-invtrig atan2-trig sqrt-auto cbrt-auto pow-auto exp-auto exp2-auto log-auto log2-auto log10-auto
+      sin_turns-turns cos_turns-turns tan_turns-turns asin_turns-invtrig acos_turns-invtrig atan_turns-invtrig atan2_turns-turns)
     string(REGEX MATCHALL "[^-]+" M ${DATA})
     list(GET M 0 SERIES)
     list(GET M 1 TYPE)

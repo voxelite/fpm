@@ -45,15 +45,11 @@ namespace fpm
 		const bool hex = floatfield == (std::ios_base::fixed | std::ios_base::scientific);
 		const auto precision = static_cast<int32_t>(std::min<std::streamsize>(os.precision() < 0 ? 6 : os.precision(), 1'000'000));
 
-		// The number in the "C" locale: in a stack buffer, unless a large precision needs more
-		std::array<char, 256> small_buffer;
-		std::string large_buffer;
-		std::span<char> buffer(small_buffer);
-		if(precision > 64)
-		{
-			large_buffer.resize(static_cast<std::size_t>(precision) + 160);
-			buffer = std::span<char>(large_buffer);
-		}
+		// The number in the "C" locale: on the stack, with the size that the type needs for all of its digits
+		// (unless the precision is larger)
+		constexpr std::size_t text_size = detail::fraction_charconv::text_size<B>();
+		detail::text_buffer<text_size> characters(detail::fraction_charconv::text_size<B>(precision));
+		const std::span<char> buffer = characters.characters();
 		std::to_chars_result result;
 		char type;
 		if(floatfield == std::ios_base::fixed)
@@ -78,15 +74,10 @@ namespace fpm
 			result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), x, std::chars_format::general, precision);
 		}
 		assert(result.ec == std::errc{});
-		std::string_view number(buffer.data(), static_cast<std::size_t>(result.ptr - buffer.data()));
-
-		std::string alternate;
+		auto length = static_cast<std::size_t>(result.ptr - buffer.data());
 		if((flags & std::ios_base::showpoint) != 0)
-		{
-			alternate.assign(number);
-			detail::apply_alternate_form(alternate, type, precision);
-			number = alternate;
-		}
+			length = detail::apply_alternate_form(buffer, length, type, precision);
+		std::string_view number(buffer.data(), length);
 
 		const std::locale locale = os.getloc();
 		const auto& ctype = std::use_facet<std::ctype<CharT>>(locale);
@@ -103,8 +94,6 @@ namespace fpm
 		std::size_t sign_length = 0;
 		std::size_t prefix_length = 0;
 
-		std::array<CharT, 512> small_body;
-		std::basic_string<CharT> large_body;
 		bool plain = false;
 		if constexpr(std::is_same_v<CharT, char>)
 		{
@@ -119,15 +108,13 @@ namespace fpm
 				prefix_length = sign_length;
 			}
 		}
+
+		// (With room for a sign, "0x" and a separator after every digit)
+		detail::text_buffer<2 * text_size + 4, CharT> body_characters(plain ? 0 : number.size() * 2 + 4);
 		if(!plain)
 		{
 			// The output: sign, "0x" prefix and the widened digits with the locale's decimal point and grouping
-			std::span<CharT> body(small_body);
-			if(number.size() * 2 + 4 > small_body.size())
-			{
-				large_body.resize(number.size() * 2 + 4);
-				body = std::span<CharT>(large_body);
-			}
+			const std::span<CharT> body = body_characters.characters();
 			std::size_t body_length = 0;
 
 			if(negative)
@@ -190,7 +177,7 @@ namespace fpm
 		};
 		const auto put_fill = [&](std::size_t count)
 		{
-			std::array<CharT, 32> fill;
+			std::array<CharT, 16> fill;
 			fill.fill(os.fill());
 			for(; count > 0; count -= std::min(count, fill.size()))
 				put(fill.data(), std::min(count, fill.size()));

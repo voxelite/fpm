@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <format>
 #include <string>
 #include <string_view>
@@ -71,6 +72,18 @@ namespace std
 		Spec precision;
 		char type = '\0';
 
+		/// An error of the format specification or its arguments: an exception, or the end of the program
+		/// where exceptions are disabled (like the standard library does)
+		[[noreturn]] static constexpr void fail(const char* const message)
+		{
+#if defined(__cpp_exceptions)
+			throw std::format_error(message);
+#else
+			static_cast<void>(message);
+			std::abort();
+#endif
+		}
+
 		static constexpr bool is_alignment(const CharT c) noexcept
 		{
 			return c == CharT('<') || c == CharT('>') || c == CharT('^');
@@ -111,7 +124,7 @@ namespace std
 					spec.arg_id = ctx.next_arg_id();
 				}
 				if(it == end || *it != CharT('}'))
-					throw std::format_error("Invalid nested width or precision");
+					fail("Invalid nested width or precision");
 #if defined(__cpp_lib_format) && __cpp_lib_format >= 202305L
 				ctx.check_dynamic_spec_integral(spec.arg_id); // compile-time check of the argument type
 #endif
@@ -142,12 +155,12 @@ namespace std
 				if constexpr(std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, CharT>)
 				{
 					if(value < 0)
-						throw std::format_error("Negative width or precision");
+						fail("Negative width or precision");
 					return static_cast<std::size_t>(value);
 				}
 				else
 				{
-					throw std::format_error("Width or precision is not an integer");
+					fail("Width or precision is not an integer");
 				}
 			};
 			const auto arg = ctx.arg(spec.arg_id);
@@ -204,19 +217,19 @@ namespace std
 
 			it = parse_spec(it, ctx, width);
 			if(width.is_set && !width.is_arg && width.value == 0)
-				throw std::format_error("Width must be positive");
+				fail("Width must be positive");
 
 			// Precision
 			if(it != end && *it == CharT('.'))
 			{
 				++it;
 				if(it == end || !((*it >= CharT('0') && *it <= CharT('9')) || *it == CharT('{')))
-					throw std::format_error("Missing precision");
+					fail("Missing precision");
 				it = parse_spec(it, ctx, precision);
 			}
 
 			if(it != end && *it == CharT('L'))
-				throw std::format_error("Locale-specific formatting of fixed-point numbers is not supported");
+				fail("Locale-specific formatting of fixed-point numbers is not supported");
 
 			// Type
 			if(it != end)
@@ -235,7 +248,7 @@ namespace std
 			}
 
 			if(it != end && *it != CharT('}'))
-				throw std::format_error("Invalid format specification for a fixed-point number");
+				fail("Invalid format specification for a fixed-point number");
 			return it;
 		}
 
@@ -246,12 +259,13 @@ namespace std
 			const bool has_precision = precision.is_set;
 			const int32_t p = has_precision ? static_cast<int32_t>(std::min<std::size_t>(resolve(precision, ctx), 1'000'000)) : -1;
 
-			// Convert, with room for a sign, a large precision and '#' additions
+			// Convert: on the stack, with the size that the type needs for all of its digits (unless the precision is larger)
 			const auto lower = static_cast<char>(type | 0x20);
-			std::string text(static_cast<std::size_t>(std::max<int32_t>(p, 0)) + 160, '\0');
+			fpm::detail::text_buffer<fpm::detail::fixed_charconv::text_size<B, F>()> buffer(fpm::detail::fixed_charconv::text_size<B, F>(p));
+			const auto characters = buffer.characters();
 			std::to_chars_result result;
-			char* const first = text.data();
-			char* const last = first + text.size();
+			char* const first = characters.data();
+			char* const last = first + characters.size();
 			switch(lower)
 			{
 				case 'a': result = fpm::to_chars(first, last, value, std::chars_format::hex, p); break;
@@ -265,24 +279,25 @@ namespace std
 					break;
 			}
 			if(result.ec != std::errc{})
-				throw std::format_error("Fixed-point value could not be formatted");
-			text.resize(static_cast<std::size_t>(result.ptr - first));
+				fail("Fixed-point value could not be formatted");
+			auto length = static_cast<std::size_t>(result.ptr - first);
 
 			if(alternate)
-				fpm::detail::apply_alternate_form(text, lower == '\0' ? (has_precision ? '\0' : 'x') : lower, p);
+				length = fpm::detail::apply_alternate_form(characters, length, lower == '\0' ? (has_precision ? '\0' : 'x') : lower, p);
 
 			if(type == 'A' || type == 'E' || type == 'G' || type == 'F')
 			{
-				for(auto& c : text)
+				for(auto& c : characters.first(length))
 					if(c >= 'a' && c <= 'z')
 						c = static_cast<char>(c - 'a' + 'A');
 			}
 
 			// Sign
+			const std::string_view text(first, length);
 			const bool negative = !text.empty() && text[0] == '-';
 			const std::size_t sign_length = (negative || sign != Sign::Minus) ? 1 : 0;
 			const char sign_char = negative ? '-' : static_cast<char>(sign);
-			const std::string_view digits = std::string_view(text).substr(negative ? 1 : 0);
+			const std::string_view digits = text.substr(negative ? 1 : 0);
 			const std::size_t content = sign_length + digits.size();
 
 			auto out = ctx.out();

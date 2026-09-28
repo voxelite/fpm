@@ -3,6 +3,8 @@ A C++ header-only fixed-point math library. "fpm" stands for "fixed-point math".
 
 It is designed to serve as a drop-in replacement for floating-point types and aims to provide as much of the standard library's functionality as possible with exclusively integers. `fpm` requires C++26.
 
+[![CI](https://github.com/voxelite/fpm/actions/workflows/ci.yml/badge.svg)](https://github.com/voxelite/fpm/actions/workflows/ci.yml)
+
 `fpm` is designed to guard against accidental conversion to and from floats and supports many of the standard C++ maths functions, including trigonometry, power and logarithmic functions, with performance and accuracy generally comparable to alternative libraries.
 
 ## Why use fixed-point math?

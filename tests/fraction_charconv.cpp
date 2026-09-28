@@ -594,12 +594,14 @@ TEST(fraction_charconv, like_fixed)
 #endif
 }
 
-// std::numeric_limits<fraction>::digits10: numbers with that many decimal places are read and written without change
-TYPED_TEST(fraction_charconv, digits10)
+// Decimal places (-min_exponent10): numbers with that many of them are read and written without change.
+// Not significant digits, which is what digits10 is about: that is 0.
+TYPED_TEST(fraction_charconv, decimal_places)
 {
 	using P = TypeParam;
-	const int digits = std::numeric_limits<P>::digits10;
+	const int digits = -std::numeric_limits<P>::min_exponent10;
 	ASSERT_GE(digits, 2);
+	EXPECT_EQ(0, std::numeric_limits<P>::digits10);
 
 	uint64_t count = 1;
 	for(int i = 0; i < digits; ++i)

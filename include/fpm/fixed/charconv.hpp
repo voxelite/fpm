@@ -50,6 +50,19 @@ namespace fpm
 		template<typename B>
 		inline constexpr int32_t bits = std::numeric_limits<magnitude_t<B>>::digits;
 
+		/// The characters of a number in any notation of `to_chars`, for a precision (negative for none) and the
+		/// alternate form: a sign, the digits before the decimal point, the point, the digits after it, and four
+		/// for an exponent (or for the zeros before the first digit, in the general notation). And one to spare.
+		/// For as many digits as the type has fraction bits at least, which are all of its digits (and for the default
+		/// precision, 6): that is what a type needs.
+		template<typename B, uint32_t F>
+		[[nodiscard]] constexpr std::size_t text_size(const int32_t precision = -1) noexcept
+		{
+			constexpr int32_t integral = max_digits10(bits<B> - static_cast<int32_t>(F));
+			constexpr int32_t digits = std::max<int32_t>(static_cast<int32_t>(F), 6);
+			return static_cast<std::size_t>(1 + integral + 1 + std::max<int32_t>(precision, digits) + 4 + 1);
+		}
+
 		template<typename B>
 		[[nodiscard]] constexpr magnitude_t<B> magnitude(const B raw) noexcept
 		{

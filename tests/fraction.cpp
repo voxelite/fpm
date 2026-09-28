@@ -486,9 +486,9 @@ TYPED_TEST(fraction, numeric_limits)
 	static_assert(L::max_exponent == 0 && L::max_exponent10 == 0);
 	EXPECT_EQ(bits, L::digits);
 	EXPECT_EQ(1 - bits, L::min_exponent);
-	EXPECT_EQ(static_cast<int>(std::floor(bits * std::log10(2.0L))), L::digits10);
+	EXPECT_EQ(0, L::digits10);
 	EXPECT_EQ(static_cast<int>(std::ceil(bits * std::log10(2.0L))), L::max_digits10);
-	EXPECT_EQ(-L::digits10, L::min_exponent10);
+	EXPECT_EQ(-static_cast<int>(std::floor(bits * std::log10(2.0L))), L::min_exponent10);
 
 	static_assert(L::lowest() == P{});
 	static_assert(L::min() == P::from_raw_value(1));

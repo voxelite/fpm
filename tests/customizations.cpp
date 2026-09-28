@@ -204,7 +204,7 @@ TYPED_TEST(customizations, numeric_limits)
 	EXPECT_EQ(L::is_bounded, true);
 	EXPECT_EQ(L::is_modulo, false);
 	EXPECT_EQ(L::digits, TL::digits());
-	EXPECT_EQ(L::digits10, 1);
+	EXPECT_EQ(L::digits10, 0);
 	EXPECT_EQ(L::max_digits10, TL::max_digits10());
 	EXPECT_EQ(L::radix, 2);
 	EXPECT_EQ(L::min_exponent, TL::min_exponent());

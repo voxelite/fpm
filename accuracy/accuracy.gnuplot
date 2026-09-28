@@ -17,6 +17,12 @@ if (ARG2 eq "trig") {
     set xrange [-pi:pi]
 }
 
+if (ARG2 eq "turns") {
+    # Angles as a part of a turn
+    set xtics 0.25
+    set xrange [0:1]
+}
+
 err(x,real) = (real != 0) ? abs((x - real)/real) * 100 : (x != 0) ? "-" : 0;
 
 set output "accuracy-".SERIES.".png"

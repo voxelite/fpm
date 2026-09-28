@@ -9,6 +9,9 @@ import re
 import sys
 
 def sanitize_type(type):
+    # Two types (an operation of a number with an integer): without the comma, which separates the columns
+    if "," in type:
+        return " with ".join(sanitize_type(part.strip()) for part in type.split(","))
     if type == "Fix16":
         return "fix16"
     if type == "CnlFixed16":

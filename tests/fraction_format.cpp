@@ -398,3 +398,107 @@ TYPED_TEST(fraction_format, locale)
 	EXPECT_FALSE(is.fail());
 	EXPECT_EQ(P{0.25}, value);
 }
+
+// A large precision needs more room than the buffer on the stack has: also with the alternate form, which adds to it
+TYPED_TEST(fraction_format, large_precision)
+{
+	using P = TypeParam;
+	if(std::numeric_limits<long double>::digits < 64)
+		GTEST_SKIP() << "long double has less than 64 bits of precision";
+
+	for(const P x : values<P>(20))
+	{
+		const long double reference = std::ldexp(static_cast<long double>(x.raw_value()), -static_cast<int>(P::fraction_bits));
+#if defined(_LIBCPP_VERSION)
+		// (See above: libc++ formats with the precision of a `double`)
+		if(static_cast<long double>(static_cast<double>(reference)) != reference)
+			continue;
+#endif
+		for(const int precision : {0, 1, 40, 47, 48, 49, 60, 100, 127, 128, 129, 200, 1000, 5000})
+		{
+			for(const char* const specification : {"{:.{}f}", "{:.{}e}", "{:.{}g}", "{:.{}}", "{:#.{}f}", "{:#.{}e}", "{:#.{}g}", "{:#.{}}", "{:+#020.{}G}"})
+			{
+#if defined(_LIBCPP_VERSION)
+				const std::string_view view(specification);
+				if(view.find('#') != std::string_view::npos && view.find_first_of("feE") == std::string_view::npos)
+					continue;
+#endif
+				ASSERT_EQ(std::vformat(specification, std::make_format_args(reference, precision)), std::vformat(specification, std::make_format_args(x, precision)))
+					<< specification << " with " << precision;
+			}
+			ASSERT_EQ(stream(reference, std::setprecision(precision)), stream(x, std::setprecision(precision)));
+			ASSERT_EQ(stream(reference, std::showpoint, std::setprecision(precision)), stream(x, std::showpoint, std::setprecision(precision)));
+			ASSERT_EQ(stream(reference, std::fixed, std::showpoint, std::setprecision(precision)), stream(x, std::fixed, std::showpoint, std::setprecision(precision)));
+			ASSERT_EQ(stream(reference, std::scientific, std::showpoint, std::setprecision(precision)), stream(x, std::scientific, std::showpoint, std::setprecision(precision)));
+		}
+	}
+}
+
+// The buffers have the size that a type needs, for the fractions with the most characters:
+// with every notation and precision, the text is the one of `to_chars`
+TYPED_TEST(fraction_format, buffers)
+{
+	using P = TypeParam;
+	using B = typename P::base_type;
+	const int digits = std::max<int>(static_cast<int>(P::fraction_bits), 6);
+
+	const auto characters = [](const P value, const char type, const int precision)
+	{
+		std::string buffer(static_cast<std::size_t>(std::max(precision, 0)) + 200, '\0');
+		char* const first = buffer.data();
+		char* const last = first + buffer.size();
+		std::to_chars_result result{};
+		switch(type)
+		{
+			case 'f': result = fpm::to_chars(first, last, value, std::chars_format::fixed, precision < 0 ? 6 : precision); break;
+			case 'e': result = fpm::to_chars(first, last, value, std::chars_format::scientific, precision < 0 ? 6 : precision); break;
+			case 'g': result = fpm::to_chars(first, last, value, std::chars_format::general, precision < 0 ? 6 : precision); break;
+			case 'a': result = fpm::to_chars(first, last, value, std::chars_format::hex, precision); break;
+			default: result = (precision < 0) ? fpm::to_chars(first, last, value) : fpm::to_chars(first, last, value, std::chars_format::general, precision); break;
+		}
+		EXPECT_EQ(std::errc{}, result.ec);
+		return std::string(first, result.ptr);
+	};
+
+	for(const B raw : {B{0}, B{1}, B{3}, std::numeric_limits<B>::max(), static_cast<B>(std::numeric_limits<B>::max() - 1), static_cast<B>(std::numeric_limits<B>::max() / 3), static_cast<B>(std::numeric_limits<B>::max() / 7 * 5)})
+	{
+		const P x = P::from_raw_value(raw);
+		for(int precision = -1; precision <= digits + 40; ++precision)
+		{
+			for(const char type : {'\0', 'f', 'e', 'g', 'a'})
+			{
+				std::string specification = "{:";
+				if(precision >= 0)
+					specification += "." + std::to_string(precision);
+				if(type != '\0')
+					specification += type;
+				specification += "}";
+				const auto expected = characters(x, type, precision);
+				ASSERT_EQ(expected, std::vformat(specification, std::make_format_args(x))) << specification;
+
+				// The alternate form adds to the text, and other options are around it
+				const auto alternate = std::vformat("{:#" + specification.substr(2), std::make_format_args(x));
+				ASSERT_GE(alternate.size(), expected.size()) << specification;
+				ASSERT_EQ(std::string(199 - alternate.size(), '*') + "+" + alternate, std::vformat("{:*>+#200" + specification.substr(2), std::make_format_args(x))) << specification;
+			}
+
+			if(precision >= 0)
+			{
+				ASSERT_EQ(characters(x, 'g', precision), stream(x, std::setprecision(precision)));
+				ASSERT_EQ(characters(x, 'f', precision), stream(x, std::fixed, std::setprecision(precision)));
+				ASSERT_EQ("+" + characters(x, 'e', precision), stream(x, std::scientific, std::showpos, std::setprecision(precision)));
+
+				std::wostringstream wide;
+				wide << std::fixed << std::showpos << std::setprecision(precision) << x;
+				const auto text = "+" + characters(x, 'f', precision);
+				ASSERT_EQ(std::wstring(text.begin(), text.end()), wide.str());
+			}
+		}
+	}
+
+	// As many characters as a type needs
+	static_assert(fpm::detail::fraction_charconv::text_size<uint16_t>() == 24);
+	static_assert(fpm::detail::fraction_charconv::text_size<uint8_t>() == 16);
+	static_assert(fpm::detail::fraction_charconv::text_size<uint64_t>() == 72);
+	static_assert(fpm::detail::fraction_charconv::text_size<uint16_t>(40) == 48);
+}

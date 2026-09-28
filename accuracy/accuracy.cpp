@@ -159,8 +159,13 @@ static void check_fpm(
 	);
 }
 
+/// The trigonometry for angles as fractions of a turn: see fraction.cpp
+void write_fraction_accuracy();
+
 int main()
 {
+	write_fraction_accuracy();
+
 	csv_output out_sin("sin.csv");
 	csv_output out_cos("cos.csv");
 	csv_output out_tan("tan.csv");

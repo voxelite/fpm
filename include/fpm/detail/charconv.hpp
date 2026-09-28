@@ -2,10 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 // Helpers for the conversions between numbers and text, shared by the types of this library.
@@ -346,21 +350,62 @@ namespace fpm
 
 	namespace detail
 	{
+		/// The characters for a number that is converted to text: `Size` of them on the stack, which is what a type needs
+		/// for all of its digits (see `text_size` of the type). More than that, for a larger precision, are allocated.
+		template<std::size_t Size, typename CharT = char>
+		class text_buffer
+		{
+		public:
+			explicit text_buffer(const std::size_t needed)
+			{
+				if(needed > Size) [[unlikely]]
+				{
+					m_large = std::make_unique_for_overwrite<CharT[]>(needed);
+					m_size = needed;
+				}
+			}
+
+			[[nodiscard]] std::span<CharT> characters() noexcept
+			{
+				return {m_large ? m_large.get() : m_small.data(), m_size};
+			}
+
+		private:
+			std::array<CharT, Size> m_small;
+			std::unique_ptr<CharT[]> m_large;
+			std::size_t m_size = Size;
+		};
+
 		/// Applies the alternate form ('#' in printf and std::format, std::showpoint for streams) to the output of
 		/// `to_chars` for the given `type` ('a', 'e', 'f', 'g', or '\0' for the general format with a precision):
 		/// the decimal point is always shown, and for 'g' trailing zeros are kept to show `precision` significant digits.
-		inline void apply_alternate_form(std::string& text, const char type, const int32_t precision)
+		/// In place, for the first `length` characters of `text` (which has room for more): returns the new length.
+		[[nodiscard]] constexpr std::size_t apply_alternate_form(const std::span<char> text, std::size_t length, const char type, const int32_t precision) noexcept
 		{
-			const auto exponent_pos = text.find_first_of(type == 'a' ? "p" : "e");
-			const auto mantissa_end = (exponent_pos == std::string::npos) ? text.size() : exponent_pos;
-			if(text.find('.') == std::string::npos)
-				text.insert(mantissa_end, 1, '.');
+			const auto insert = [&](const std::size_t position, const std::size_t count, const char c)
+			{
+				// (The text has room for it: see `text_size` of the types)
+				assert(position <= length && length + count <= text.size());
+				if(length + count > text.size()) [[unlikely]]
+					return;
+				std::copy_backward(text.begin() + static_cast<std::ptrdiff_t>(position), text.begin() + static_cast<std::ptrdiff_t>(length), text.begin() + static_cast<std::ptrdiff_t>(length + count));
+				std::fill_n(text.begin() + static_cast<std::ptrdiff_t>(position), count, c);
+				length += count;
+			};
+			const auto find = [&](const char c)
+			{
+				const auto position = std::string_view(text.data(), length).find(c);
+				return (position == std::string_view::npos) ? length : position;
+			};
+
+			// (The digits of the hexadecimal notation include 'e')
+			if(find('.') == length)
+				insert(find(type == 'a' ? 'p' : 'e'), 1, '.');
 
 			if(type == 'g' || type == '\0')
 			{
 				const auto significant_wanted = static_cast<std::size_t>(precision == 0 ? 1 : (precision < 0 ? 6 : precision));
-				const auto end_pos = text.find_first_of("e");
-				const auto end = (end_pos == std::string::npos) ? text.size() : end_pos;
+				const auto end = find('e');
 				std::size_t significant = 0;
 				bool leading = true;
 				for(std::size_t i = 0; i < end; ++i)
@@ -374,8 +419,9 @@ namespace fpm
 				if(leading)
 					significant = 1; // zero: "0" counts as one significant digit
 				if(significant < significant_wanted)
-					text.insert(end, significant_wanted - significant, '0');
+					insert(end, significant_wanted - significant, '0');
 			}
+			return length;
 		}
 	}
 }

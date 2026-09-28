@@ -161,37 +161,6 @@ namespace fpm
 			return static_cast<T>(static_cast<BaseType>(BaseType{1} << (fraction_bits - 1)));
 		}
 
-		/// 2^exponent
-		template<std::floating_point T>
-		[[nodiscard]] inline static constexpr T power_of_two(const int32_t exponent) noexcept
-		{
-			T result{1};
-			for(int32_t i = 0; i < exponent; ++i)
-				result *= T{2};
-			return result;
-		}
-
-		/// val - floor(val) in [0, 1]: 1 for a negative number that is too small to make a difference
-		template<std::floating_point T>
-		[[nodiscard]] inline static constexpr T fraction_of(T val) noexcept
-		{
-			// From here on every number is an integer (as the difference between consecutive numbers is 1 at least)
-			constexpr int32_t digits = std::numeric_limits<T>::digits;
-			constexpr T integers = power_of_two<T>(digits - 1);
-			if(!(val > -integers && val < integers)) [[unlikely]]
-				return T{0};
-
-			if constexpr(digits > 64)
-			{
-				// Too large to convert to an integer: without the multiples of 2^62 first, which is exact
-				constexpr T chunk = power_of_two<T>(62);
-				if(val >= chunk || val <= -chunk) [[unlikely]]
-					val -= static_cast<T>(static_cast<int64_t>(val / chunk)) * chunk;
-			}
-			const T result = val - static_cast<T>(static_cast<int64_t>(val)); // in (-1, 1)
-			return result < T{0} ? result + T{1} : result;
-		}
-
 		template<std::floating_point T>
 		[[nodiscard]] inline static constexpr BaseType floating_to_raw(const T val) noexcept
 		{
@@ -201,7 +170,8 @@ namespace fpm
 			// The fraction times 2^fraction_bits rounded to nearest, in two steps: neither the scale nor a result
 			// that rounds up to it fits in the base type. The sum wraps around for 1.
 			using U = unsigned_with<BaseType>;
-			const T scaled = fraction_of(val) * half_scale<T>();
+			// (The fraction is 1 for a negative number that is too small to make a difference: that is 0 as well.)
+			const T scaled = detail::modulo_power_of_two(val, 0) * half_scale<T>();
 			const auto high = static_cast<BaseType>(scaled); // truncated
 			const auto low = static_cast<BaseType>((scaled - static_cast<T>(high)) * T{2} + T{0.5}); // 0, 1 or 2
 			return static_cast<BaseType>(static_cast<U>(high) * 2 + low);
@@ -385,10 +355,10 @@ namespace std
 		static constexpr bool is_modulo = true;
 		static constexpr int digits = std::numeric_limits<B>::digits;
 
-		// The decimal places that a fraction keeps: any number in [0, 1) with `digits10` digits after the decimal point
-		// is convertible from text and back without change. (Not the significant digits, like for floating-point types:
-		// a fraction has an absolute precision, so small numbers have few of those.)
-		static constexpr int digits10 = fpm::detail::digits10(std::numeric_limits<B>::digits);
+		// Any number with `digits10` significant base-10 digits is convertible from text and back without change.
+		// That is none: the precision is absolute, so a small number has fewer significant digits than a large one.
+		// (The decimal places that are kept are -min_exponent10.)
+		static constexpr int digits10 = 0;
 		static constexpr int max_digits10 = fpm::detail::max_digits10(std::numeric_limits<B>::digits);
 
 		static constexpr int radix = 2;

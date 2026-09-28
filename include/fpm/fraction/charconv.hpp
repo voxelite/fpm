@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <charconv>
@@ -44,6 +45,18 @@ namespace fpm
 
 		template<typename B>
 		using decimal_for = decimal<max_digits<B>>;
+
+		/// The characters of a fraction in any notation of `to_chars`, for a precision (negative for none) and the
+		/// alternate form: a sign, the digit before the decimal point, the point, the digits after it, and four
+		/// for an exponent (or for the zeros before the first digit, in the general notation). And one to spare.
+		/// For as many digits as the type has bits at least, which are all of its digits (and for the default
+		/// precision, 6): that is what a type needs.
+		template<typename B>
+		[[nodiscard]] constexpr std::size_t text_size(const int32_t precision = -1) noexcept
+		{
+			constexpr int32_t digits = std::max<int32_t>(bits<B>, 6);
+			return static_cast<std::size_t>(1 + 1 + 1 + std::max<int32_t>(precision, digits) + 4 + 1);
+		}
 
 		/// Exact decimal expansion of `raw / 2^bits`, or its first digits: generation stops after `max_significant`
 		/// significant digits or at fractional position `max_fraction_position` (1-based), and `sticky` tells whether

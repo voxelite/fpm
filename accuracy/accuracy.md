@@ -26,3 +26,15 @@ gnuplot -c accuracy.gnuplot sin trig
 gnuplot -c accuracy.gnuplot sqrt
 gnuplot -c accuracy.gnuplot tan trig
 ```
+
+The files with `_turns` are for the angles that are stored as a fraction of a turn (`fpm::fraction`):
+
+```
+gnuplot -c accuracy.gnuplot acos_turns
+gnuplot -c accuracy.gnuplot asin_turns
+gnuplot -c accuracy.gnuplot atan_turns
+gnuplot -c accuracy.gnuplot atan2_turns turns
+gnuplot -c accuracy.gnuplot cos_turns turns
+gnuplot -c accuracy.gnuplot sin_turns turns
+gnuplot -c accuracy.gnuplot tan_turns turns
+```

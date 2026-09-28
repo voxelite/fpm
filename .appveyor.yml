@@ -1,21 +1,21 @@
+# The basic builds. The CI for all the platforms is .github/workflows/ci.yml.
 version: 0.1.{build}
 
 branches:
   only:
     - master
 
+# With the compiler for C++26
 image:
-- Visual Studio 2017
-- Visual Studio 2019
+- Visual Studio 2022
 
 configuration:
   - Debug
   - Release
 
+# Only the tests: the benchmark and accuracy tools download other libraries
 before_build:
-  - mkdir build
-  - cd build
-  - cmake ..
+  - cmake -B build -DFPM_BUILD_BENCHMARK=OFF -DFPM_BUILD_ACCURACY=OFF
 
 build:
   project: build/ALL_BUILD.vcxproj
@@ -23,4 +23,4 @@ build:
   verbosity: minimal
 
 test_script:
-  - ctest -C %configuration%
+  - ctest --test-dir build -C %configuration% --output-on-failure

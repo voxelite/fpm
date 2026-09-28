@@ -43,6 +43,42 @@ namespace fpm
 				return false;
 		}
 
+		/// 2^exponent, for an exponent of 0 at least
+		template<std::floating_point T>
+		[[nodiscard]] inline constexpr T power_of_two(const int32_t exponent) noexcept
+		{
+			T result{1};
+			for(int32_t i = 0; i < exponent; ++i)
+				result *= T{2};
+			return result;
+		}
+
+		/// val modulo 2^bits: val - floor(val / 2^bits) * 2^bits, which is exact. In [0, 2^bits]: 2^bits only for
+		/// a negative number that is too small to make a difference. 0 for a number that is not finite.
+		template<std::floating_point T>
+		[[nodiscard]] inline constexpr T modulo_power_of_two(const T val, const int32_t bits) noexcept
+		{
+			// From here on every number is an integer (as the difference between consecutive numbers is 1 at least)
+			constexpr int32_t digits = std::numeric_limits<T>::digits;
+			constexpr T integers = power_of_two<T>(digits - 1);
+			const T scale = power_of_two<T>(bits);
+			T quotient = val / scale;
+			if(!(quotient > -integers && quotient < integers)) [[unlikely]]
+				return T{0};
+
+			if constexpr(digits > 64)
+			{
+				// Too large to convert to an integer: without the multiples of 2^62 first, which is exact
+				constexpr T chunk = power_of_two<T>(62);
+				if(quotient >= chunk || quotient <= -chunk) [[unlikely]]
+					quotient -= static_cast<T>(static_cast<int64_t>(quotient / chunk)) * chunk;
+			}
+			T whole = static_cast<T>(static_cast<int64_t>(quotient)); // towards zero
+			if(whole > quotient)
+				whole -= T{1};
+			return (quotient - whole) * scale;
+		}
+
 		/// value / 2^bits for bits >= 1: rounded to nearest (ties away from zero), or truncated towards zero.
 		/// An arithmetic shift of the biased value instead of a division: the same result, but fast for 128-bit
 		/// class types as well. The biased value must fit: |value| + 2^bits may not overflow.
@@ -178,8 +214,8 @@ namespace fpm
 			: m_value(integral_to_raw(val))
 		{}
 
-		/// Converts a floating-point number to the fixed-point type.
-		/// Like static_cast, this truncates bits that don't fit.
+		/// Converts a (finite) floating-point number to the fixed-point type.
+		/// This truncates bits that don't fit, like the other conversions: a number beyond the range wraps around.
 		template<std::floating_point T>
 		inline constexpr explicit fixed(const T val) noexcept
 			: m_value(floating_to_raw(val))
@@ -437,11 +473,48 @@ namespace fpm
 		template<std::floating_point T>
 		[[nodiscard]] inline static constexpr BaseType floating_to_raw(const T val) noexcept
 		{
+			// The conversion of a number beyond the range of the base type is undefined (and not the same for every platform)
 			const T scaled = val * static_cast<T>(RAW_ONE);
+			constexpr T limit = detail::power_of_two<T>(std::numeric_limits<BaseType>::digits);
+			constexpr T lowest = std::is_signed_v<BaseType> ? -limit : T{-1};
+			if(scaled < limit && (std::is_signed_v<BaseType> ? scaled >= lowest : scaled > lowest)) [[likely]]
+			{
+				const auto whole = static_cast<BaseType>(scaled); // truncated
+				if constexpr(EnableRounding)
+				{
+					// By what is left, which is exact: the sum of a large number and a half is rounded itself.
+					// (In the unsigned type, as the ends of the range wrap around.)
+					using U = std::make_unsigned_t<std::common_type_t<BaseType, unsigned int>>;
+					const T rest = scaled - static_cast<T>(whole);
+					if(rest >= T{0.5})
+						return static_cast<BaseType>(static_cast<U>(whole) + 1u);
+					if(rest <= T{-0.5})
+						return static_cast<BaseType>(static_cast<U>(whole) - 1u);
+				}
+				return whole;
+			}
+			return floating_to_raw_wrapped(val);
+		}
+
+		/// Raw value of a floating-point number beyond the range: modulo the range, like for an integer that does not fit
+		template<std::floating_point T>
+		[[nodiscard]] inline static constexpr BaseType floating_to_raw_wrapped(const T val) noexcept
+		{
+			assert(val - val == T{0}); // finite
+
+			// The magnitude without the multiples of the range, which is exact. Then rounded like any other number,
+			// in the unsigned type: up to the range itself, which is 0.
+			using U = std::make_unsigned_t<std::common_type_t<BaseType, unsigned int>>;
+			constexpr int32_t bits = std::numeric_limits<std::make_unsigned_t<BaseType>>::digits;
+			const bool negative = val < T{0};
+			const T scaled = detail::modulo_power_of_two(negative ? -val : val, bits - static_cast<int32_t>(FractionBits)) * static_cast<T>(RAW_ONE);
+			auto result = static_cast<U>(scaled); // truncated
 			if constexpr(EnableRounding)
-				return static_cast<BaseType>((val >= T{0}) ? (scaled + T{0.5}) : (scaled - T{0.5}));
-			else
-				return static_cast<BaseType>(scaled);
+			{
+				if(scaled - static_cast<T>(result) >= T{0.5})
+					++result;
+			}
+			return static_cast<BaseType>(negative ? U{0} - result : result);
 		}
 
 		BaseType m_value;
@@ -675,11 +748,10 @@ namespace std
 		static constexpr bool is_modulo = std::numeric_limits<B>::is_modulo;
 		static constexpr int digits = std::numeric_limits<B>::digits;
 
-		// Any number with `digits10` significant base-10 digits (that fits in
-		// the range of the type) is guaranteed to be convertible from text and
-		// back without change. Worst case, this is 0.000...001, so we can only
-		// guarantee this case. Nothing more.
-		static constexpr int digits10 = 1;
+		// Any number with `digits10` significant base-10 digits is convertible from text and back without change.
+		// That is none: the precision is absolute, so a small number has fewer significant digits than a large one.
+		// 0.00001 is 0.00002 with 16 fraction bits, for instance. (The decimal places that are kept are -min_exponent10.)
+		static constexpr int digits10 = 0;
 
 		// This is equal to max_digits10 for the integer and fractional part together.
 		static constexpr int max_digits10 = fpm::detail::max_digits10(std::numeric_limits<B>::digits - F) + fpm::detail::max_digits10(F);

@@ -1,39 +1,30 @@
+# The basic builds. The CI for all the platforms is .github/workflows/ci.yml.
 language: cpp
-dist: xenial
-
-sudo: false
-os:
-  - linux
-
-before_install:
-  - sudo apt-get install -y gnuplot
-
-matrix:
-  include:
-    - os: linux
-      compiler: gcc
-      env: CONFIG=Debug
-    - os: linux
-      compiler: gcc
-      env: CONFIG=Release
-    - os: linux
-      compiler: clang
-      env: CONFIG=Debug
-    - os: linux
-      compiler: clang
-      env: CONFIG=Release
-
-script:
-  - set -e
-  - mkdir -p build && cd build
-  - cmake -DCMAKE_BUILD_TYPE=$CONFIG .. && make -j
-  - ctest --output-on-failure
-  - make fpm-accuracy-images -j
+os: linux
+# Ubuntu 24.04: with the compilers for C++26
+dist: noble
 
 addons:
-  artifacts:
-    working_dir: build
-    paths:
-    - $(ls accuracy-*.png | tr "\n" ":")
-    target_paths:
-    - fpm
+  apt:
+    packages:
+      - cmake
+      - g++-14
+      - clang-18
+
+jobs:
+  include:
+    - name: GCC, Debug
+      env: COMPILER=g++-14 CONFIG=Debug
+    - name: GCC, Release
+      env: COMPILER=g++-14 CONFIG=Release
+    - name: Clang, Debug
+      env: COMPILER=clang++-18 CONFIG=Debug
+    - name: Clang, Release
+      env: COMPILER=clang++-18 CONFIG=Release
+
+# Only the tests: the benchmark and accuracy tools download other libraries
+script:
+  - set -e
+  - cmake -B build -DCMAKE_BUILD_TYPE=$CONFIG -DCMAKE_CXX_COMPILER=$COMPILER -DFPM_BUILD_BENCHMARK=OFF -DFPM_BUILD_ACCURACY=OFF
+  - cmake --build build --parallel
+  - ctest --test-dir build --output-on-failure

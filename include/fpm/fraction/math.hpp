@@ -128,6 +128,25 @@ namespace fpm
 			return swap ? static_cast<FB>(quarter<FB> - angle) : angle;
 		}
 
+		/// atan(a) as a part of a turn, for the raw value a >= 0 of a number with F fraction bits:
+		/// like atan_turns(a, 1), without a division for the numbers up to 1
+		template<typename FB, typename B, typename I, uint32_t F>
+		[[nodiscard]] inline constexpr FB atan_turns(const I a) noexcept
+		{
+			using S = std::make_signed_t<B>;
+			constexpr int32_t M = poly_bits<B, 1>;
+			constexpr I one = I{1} << F;
+			if(a == one)
+				return static_cast<FB>(quarter<FB> >> 1);
+
+			const bool large = a > one;
+			const auto ratio = large
+				? static_cast<S>(((one << M) + a / 2) / a)
+				: static_cast<S>(shift_by<M - static_cast<int32_t>(F)>(a));
+			const FB angle = turns<FB, B, I>(static_cast<I>(atan_first_octant<B, I, angle_precision<FB, F>>(ratio)));
+			return large ? static_cast<FB>(quarter<FB> - angle) : angle;
+		}
+
 		/// The angle for the raw value of a fraction in the first quadrant, mirrored to the opposite side of
 		/// the vertical axis (1/2 - angle) and then of the horizontal one (-angle). Exact, and modulo a turn.
 		template<typename FB>
@@ -196,6 +215,13 @@ namespace fpm
 			return mirrored<FB>(turns<FB, B, I>(negative ? static_cast<I>(I{0} - angle) : angle), false, negative);
 		}
 
+		/// atan, for a number of the type to calculate in
+		template<typename FB, typename B, typename I, uint32_t F, bool R>
+		[[nodiscard]] inline constexpr fraction<FB> atan(const fixed<B, I, F, R> x) noexcept
+		{
+			return mirrored<FB>(atan_turns<FB, B, I, F>(magnitude<B, I>(x.raw_value())), false, is_negative(x.raw_value()));
+		}
+
 		/// atan2, for numbers of the type to calculate in
 		template<typename FB, typename B, typename I, uint32_t F, bool R>
 		[[nodiscard]] inline constexpr fraction<FB> atan2(const fixed<B, I, F, R> y, const fixed<B, I, F, R> x) noexcept
@@ -234,10 +260,8 @@ namespace fpm
 	template<Fraction Result, typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr Result atan(const fixed<B, I, F, R> x) noexcept
 	{
-		// The angle of the vector (1, x)
 		using FB = typename Result::base_type;
-		using Value = detail::fraction_math::evaluation_t<FB, B, I, F, R>;
-		return detail::fraction_math::atan2<FB>(Value(x), Value(1));
+		return detail::fraction_math::atan<FB>(detail::fraction_math::evaluation_t<FB, B, I, F, R>(x));
 	}
 
 	/// The angle of the vector (x, y), as a part of a turn: counterclockwise from the positive x axis.

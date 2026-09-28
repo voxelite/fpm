@@ -663,3 +663,44 @@ TEST(charconv, unsigned_many_fraction_bits)
 	}
 #endif
 }
+
+// Decimal places (-min_exponent10): numbers with that many of them are read and written without change.
+// Not significant digits, which is what digits10 is about: that is 0.
+TYPED_TEST(charconv, decimal_places)
+{
+	using P = TypeParam;
+	const int digits = -std::numeric_limits<P>::min_exponent10;
+	EXPECT_EQ(0, std::numeric_limits<P>::digits10);
+	if(digits == 0)
+		return; // (few fraction bits)
+
+	uint64_t count = 1;
+	for(int i = 0; i < digits; ++i)
+		count *= 10;
+	std::mt19937_64 rng(11);
+	const bool all = count <= 100000;
+	for(uint64_t i = 0; i < (all ? count : 100000); ++i)
+	{
+		auto text = std::to_string(all ? i : rng() % count);
+		text = "0." + std::string(static_cast<std::size_t>(digits) - text.size(), '0') + text;
+
+		P value{};
+		ASSERT_EQ(std::errc{}, fpm::from_chars(text.data(), text.data() + text.size(), value).ec) << text;
+		std::array<char, 128> buffer{};
+		const auto result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), value, std::chars_format::fixed, digits);
+		// (Types without rounding truncate the number: that is not the nearest one)
+		if(P::enable_rounding)
+			ASSERT_EQ(text, std::string_view(buffer.data(), result.ptr));
+	}
+
+	// One significant digit is not kept
+	if(P::fraction_bits == 16 && P::enable_rounding)
+	{
+		P value{};
+		const std::string_view text = "0.00001";
+		ASSERT_EQ(std::errc{}, fpm::from_chars(text.data(), text.data() + text.size(), value).ec);
+		std::array<char, 128> buffer{};
+		const auto result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), value, std::chars_format::scientific, 0);
+		EXPECT_EQ("2e-05", std::string_view(buffer.data(), result.ptr));
+	}
+}

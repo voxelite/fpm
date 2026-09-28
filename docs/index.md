@@ -76,7 +76,7 @@ It is meant to store such values, not to calculate with them.
 * It converts explicitly to and from floating-point types, `fpm::fixed` types and fractions with another number of bits.
 * For anything else, convert it to a `fpm::fixed` type (with parentheses, as in the example).
 * It has specializations of `std::hash` and `std::numeric_limits`, and an order (of the values in [0, 1)) for `std::less`, `std::set` and the like.
-  `is_modulo` is true, as it wraps around; `digits10` are the decimal places that are read and written without change.
+  `is_modulo` is true, as it wraps around.
 
 ### Conversions to a fraction
 The conversion of a number to a fraction is modulo 1 as well, from any type and from text:
@@ -170,6 +170,8 @@ Notes:
 The header `<fpm/fixed.hpp>` provides specializations for `fpm::fixed` for the following types:
 * `std::hash`
 * `std::numeric_limits`. Like for floating-point types, `min()` is the smallest positive value and `lowest()` the most negative one.
+  `digits10` is 0: no number of significant digits is kept for every number, as the precision is absolute (so small numbers have few of them).
+  The decimal places that are kept are `-min_exponent10`: 4 for 16 fraction bits.
 
 The header `<fpm/fixed/format.hpp>` provides the specialization of `std::formatter`.
 
@@ -193,6 +195,9 @@ int e = static_cast<int>(b);   // OK: explicit conversion to int
 bool f = b < 3;                // OK: comparison with an integer
 ```
 You must still guard against underflow and overflow, though.
+
+Numbers that a type cannot represent wrap around when they are converted to it, for integers and floating-point numbers alike:
+`fpm::fixed_16_16 { 65537.5 }` is 1.5. The result is the same for every platform. Floating-point numbers must be finite.
 
 Arithmetic and comparisons with integers work for signed and unsigned integers alike (e.g. `total / values.size()`).
 Comparisons with integers are exact, also for integers that the fixed-point type cannot represent.
@@ -225,7 +230,9 @@ Like for the built-in types, a value that is out of range (or infinity) stores t
 
 ### Formatting
 The `<fpm/fixed/format.hpp>` header provides `std::format` support, with the same format specifications as floating-point types (except `L`).
-It does not depend on streams or locales, so it suits targets where those are too large. `<fpm/fixed/ios.hpp>` includes it as well.
+It does not depend on streams or locales, so it suits targets where those are too large, and it does not allocate memory:
+the text is on the stack, with the size that the type needs for all of its digits (28 characters for `fpm::fixed_16_16`).
+Only a precision of more digits than the type has is allocated. Where exceptions are disabled, an error of the format ends the program, like for the standard library. `<fpm/fixed/ios.hpp>` includes it as well.
 ```c++
 #include <fpm/fixed/format.hpp>
 

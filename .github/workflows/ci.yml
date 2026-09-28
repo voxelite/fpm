@@ -1,0 +1,270 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CTEST_OUTPUT_ON_FAILURE: 1
+  # Only the tests: the benchmark and accuracy tools download other libraries (see the job "tools")
+  CMAKE_OPTIONS: -DFPM_BUILD_BENCHMARK=OFF -DFPM_BUILD_ACCURACY=OFF
+
+jobs:
+  # GCC and Clang, with the variations of the library
+  linux:
+    name: Linux, ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GCC 14, Debug
+            cxx: g++-14
+            build: Debug
+          - name: GCC 14, Release
+            cxx: g++-14
+            build: Release
+          - name: Clang 18, Debug
+            cxx: clang++-18
+            build: Debug
+          - name: Clang 18, Release
+            cxx: clang++-18
+            build: Release
+          - name: Clang 18, sanitizers
+            cxx: clang++-18
+            build: Debug
+            flags: -fsanitize=undefined,address -fno-sanitize-recover=undefined
+          - name: Clang 18, libc++
+            cxx: clang++-18
+            build: Release
+            flags: -stdlib=libc++
+            packages: libc++-18-dev libc++abi-18-dev
+          - name: Clang 18, FPM_FRACTION_STRICT
+            cxx: clang++-18
+            build: Debug
+            options: -DFPM_FRACTION_STRICT=ON
+          - name: Clang 18, without 128-bit integers
+            cxx: clang++-18
+            build: Release
+            flags: -DFPM_NO_INT128
+          - name: Clang 18, without exceptions (headers only)
+            cxx: clang++-18
+            headers: -fno-exceptions -fno-rtti
+          - name: GCC 14, warnings (headers only)
+            cxx: g++-14
+            headers: -Wall -Wextra -Werror
+          - name: Clang 18, warnings (headers only)
+            cxx: clang++-18
+            headers: -Wall -Wextra -Werror
+          # (With SSE2 for the floating-point numbers of the tests: not the extended precision of x87)
+          - name: GCC 14, 32 bits (x86)
+            cxx: g++-14
+            build: Release
+            flags: -m32 -msse2 -mfpmath=sse
+            packages: g++-14-multilib
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packages
+        if: matrix.packages
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+      - name: Compile the headers
+        if: matrix.headers
+        run: |
+          for header in $(cd include && find fpm -name '*.hpp' | sort); do
+            echo "$header"
+            echo "#include <$header>" | ${{ matrix.cxx }} -std=c++26 ${{ matrix.headers }} -Iinclude -fsyntax-only -x c++ -
+          done
+      - name: Configure
+        if: matrix.build
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}"
+          ${{ env.CMAKE_OPTIONS }} ${{ matrix.options }}
+      - name: Build
+        if: matrix.build
+        run: cmake --build build --parallel
+      - name: Test
+        if: matrix.build
+        run: ctest --test-dir build
+
+  # Other architectures. ARM64 has a `long double` with 113 bits of precision.
+  linux-arm64:
+    name: Linux ARM64, ${{ matrix.cxx }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++-14, clang++-18]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} ${{ env.CMAKE_OPTIONS }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build
+
+  # With an emulator
+  linux-emulated:
+    name: Linux ${{ matrix.name }} (emulated)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: RISC-V 64
+            processor: riscv64
+            triple: riscv64-linux-gnu
+            emulator: qemu-riscv64
+          - name: ARM 32
+            processor: arm
+            triple: arm-linux-gnueabihf
+            emulator: qemu-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packages
+        run: sudo apt-get update && sudo apt-get install -y g++-14-${{ matrix.triple }} qemu-user
+      - name: Configure
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_SYSTEM_NAME=Linux
+          -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.processor }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.triple }}-g++-14
+          "-DCMAKE_CROSSCOMPILING_EMULATOR=${{ matrix.emulator }};-L;/usr/${{ matrix.triple }}"
+          ${{ env.CMAKE_OPTIONS }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build
+
+  windows:
+    name: Windows, ${{ matrix.name }}, ${{ matrix.build }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        name: ["MSVC", "MSVC, 32 bits (x86)", "clang-cl"]
+        build: [Release, Debug]
+        include:
+          - name: MSVC
+            arguments: -A x64
+          - name: MSVC, 32 bits (x86)
+            arguments: -A Win32
+          - name: clang-cl
+            arguments: -A x64 -T ClangCL
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build ${{ matrix.arguments }} ${{ env.CMAKE_OPTIONS }}
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build }} --parallel
+      - name: Test
+        run: ctest --test-dir build -C ${{ matrix.build }}
+
+  windows-mingw:
+    name: Windows, MinGW ${{ matrix.name }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: GCC
+            system: UCRT64
+            prefix: mingw-w64-ucrt-x86_64
+            compiler: gcc
+            cxx: g++
+          - name: Clang
+            system: CLANG64
+            prefix: mingw-w64-clang-x86_64
+            compiler: clang
+            cxx: clang++
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.system }}
+          update: true
+          install: >-
+            ${{ matrix.prefix }}-${{ matrix.compiler }}
+            ${{ matrix.prefix }}-cmake
+            ${{ matrix.prefix }}-ninja
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} ${{ env.CMAKE_OPTIONS }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build
+
+  # WebAssembly (32 bits), with Node.js to run the tests
+  emscripten:
+    name: Emscripten
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+      # (The tests check the exceptions of std::format, which Emscripten disables by default)
+      - name: Configure
+        run: >
+          emcmake cmake -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_FLAGS=-fexceptions
+          -DCMAKE_EXE_LINKER_FLAGS=-fexceptions
+          ${{ env.CMAKE_OPTIONS }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build
+
+  # Compiled only: the program of tests/esp-idf uses all of the library
+  esp-idf:
+    name: ESP-IDF, ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Xtensa and RISC-V, both with 32 bits
+        target: [esp32, esp32c3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: ${{ matrix.target }}
+          path: tests/esp-idf
+
+  # The benchmark and accuracy tools, which download the libraries they compare with
+  tools:
+    name: Benchmark and accuracy tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18 -DFPM_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Accuracy
+        run: cd build && ./fpm-accuracy && ls *.csv
+      - name: Benchmark
+        run: >
+          cd build
+          && ./fpm-benchmark --benchmark_min_time=0.01 --benchmark_out=performance.json --benchmark_out_format=json
+          && python3 ../benchmarks/benchmark.py performance.json performance.csv

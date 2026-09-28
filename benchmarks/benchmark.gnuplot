@@ -43,3 +43,15 @@ plot DATA_FILE using 2:xtic(1) title columnheader(2), \
      DATA_FILE using 5:xtic(1) title columnheader(5), \
      DATA_FILE using 15:xtic(1) title columnheader(15), \
      DATA_FILE using 20:xtic(1) title columnheader(20)
+
+# Angles that are stored as a fraction of a turn (fpm::fraction), and the radians of the same types of numbers.
+# By the names of the columns: these are the last ones, after the ones above.
+set output "performance_fraction.png"
+plot DATA_FILE using (column("fpm::fixed_16_16")):xtic(1) title "fpm::fixed_16_16", \
+     DATA_FILE using (column("fpm::turns_16_for_16_16")):xtic(1) title "fpm::turns_16_for_16_16", \
+     DATA_FILE using (column("fpm::fixed_8_24")):xtic(1) title "fpm::fixed_8_24", \
+     DATA_FILE using (column("fpm::turns_16_for_8_24")):xtic(1) title "fpm::turns_16_for_8_24", \
+     DATA_FILE using (column("fpm::fraction_8")):xtic(1) title "fpm::fraction_8", \
+     DATA_FILE using (column("fpm::fraction_16")):xtic(1) title "fpm::fraction_16", \
+     DATA_FILE using (column("fpm::fraction_32")):xtic(1) title "fpm::fraction_32", \
+     DATA_FILE using (column("fpm::fraction_64")):xtic(1) title "fpm::fraction_64"
