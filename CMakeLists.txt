@@ -21,6 +21,10 @@ install(FILES
   include/fpm/math.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fpm
 )
+install(FILES
+  include/fpm/detail/polynomials.hpp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fpm/detail
+)
 
 OPTION(BUILD_ACCURACY  "fpm accuracy"  ON)
 OPTION(BUILD_BENCHMARK "fpm benchmark" ON)

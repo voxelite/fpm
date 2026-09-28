@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #endif
 
 #include "fixed.hpp"
+#include "detail/polynomials.hpp"
 
 namespace fpm
 {
@@ -105,51 +107,148 @@ namespace fpm
 			return {q, r};
 		}
 
-		/// Fraction bits for constants in precise calculations: as many as the intermediate type allows
-		/// when multiplied with a raw value of the base type (at most 63).
-		template<typename B, typename I>
-		inline constexpr int32_t constant_precision = std::min<int32_t>(63, static_cast<int32_t>(sizeof(I) - sizeof(B)) * 8 - 1);
+		/// Value bits (without the sign) of a signed integer type. From its size, so this works for 128-bit types as well.
+		template<typename T>
+		inline constexpr int32_t value_bits = static_cast<int32_t>(sizeof(T)) * 8 - 1;
 
-		/// A Q63 constant, rounded to `constant_precision<B, I>` fraction bits
-		template<typename B, typename I, int64_t ConstantQ63>
-		inline constexpr I precise_constant = static_cast<I>(
-			(constant_precision<B, I> == 63) ? ConstantQ63 : ((ConstantQ63 >> (62 - constant_precision<B, I>)) + 1) >> 1
-		);
-
-		/// x * c for a constant 0 <= c < 1 given in Q63, with a single rounding
-		/// (instead of rounding the constant to the precision of the type first)
-		template<int64_t ConstantQ63, typename B, typename I, uint32_t F, bool R>
-		[[nodiscard]] inline constexpr fixed<B, I, F, R> multiply_by_constant(const fixed<B, I, F, R> x) noexcept
+		template<typename I>
+		[[nodiscard]] consteval auto signed_type_of() noexcept
 		{
-			constexpr int32_t P = constant_precision<B, I>;
-			const I product = static_cast<I>(x.raw_value()) * precise_constant<B, I, ConstantQ63>;
-			if constexpr(R)
-				return fixed<B, I, F, R>::from_raw_value(static_cast<B>((product + (I{1} << (P - 1))) >> P));
+			if constexpr(I(-1) < I(0))
+				return std::type_identity<I>{};
+			else if constexpr(sizeof(I) <= sizeof(int64_t))
+				return std::type_identity<std::make_signed_t<I>>{};
+#ifdef FPM_INT128
 			else
-				return fixed<B, I, F, R>::from_raw_value(static_cast<B>(product / (I{1} << P))); // truncate towards zero
+				return std::type_identity<FPM_INT128>{};
+#endif
+		}
+
+		/// The signed type with the width of the intermediate type I, for calculations that can be negative
+		/// even for unsigned types
+		template<typename I>
+		using signed_intermediate = typename decltype(signed_type_of<I>())::type;
+
+		/// value * 2^Shift: shifted to the left, or to the right (towards negative infinity) for a negative Shift
+		template<int32_t Shift, typename T>
+		[[nodiscard]] inline constexpr T shift_by(const T value) noexcept
+		{
+			if constexpr(Shift >= 0)
+				return static_cast<T>(value << Shift);
+			else
+				return static_cast<T>(value >> -Shift);
+		}
+
+		/// value / 2^Shift rounded to nearest (ties upwards), or value * 2^-Shift for a negative Shift
+		template<int32_t Shift, typename T>
+		[[nodiscard]] inline constexpr T round_shift(const T value) noexcept
+		{
+			if constexpr(Shift > 0)
+				return static_cast<T>((value + (T{1} << (Shift - 1))) >> Shift);
+			else
+				return shift_by<-Shift>(value);
+		}
+
+		/// A constant `value` in Q`from`, rounded to nearest in Q`to`
+		template<typename T>
+		[[nodiscard]] inline constexpr T round_constant(const int64_t value, const int32_t from, const int32_t to) noexcept
+		{
+			if(to >= from)
+				return static_cast<T>(static_cast<T>(value) << (to - from));
+			return static_cast<T>(((value >> (from - to - 1)) + 1) >> 1);
+		}
+
+		/// A constant c in [0, 2) with 124 fraction bits: c = hi / 2^62 + lo / 2^124, with 0 <= lo < 2^62
+		struct long_constant
+		{
+			uint64_t hi;
+			uint64_t lo;
+
+			/// floor(c * 2^q) modulo 2^count, for 0 <= q <= 124 and count <= 63
+			[[nodiscard]] consteval int64_t bits(const int32_t q, const int32_t count) const noexcept
+			{
+				const uint64_t value = (q <= 62) ? hi >> (62 - q) : (hi << (q - 62)) | (lo >> (124 - q));
+				return static_cast<int64_t>(value & ((uint64_t{1} << count) - 1));
+			}
+		};
+
+		inline constexpr long_constant log2_e{6653256548922161245, 4021995779230246865};     // log2(e) = 1.4426950408889634074
+		inline constexpr long_constant two_over_pi{2935890503282001226, 2288520740914548188}; // 2/π = 0.63661977236758134308
+
+		/// x * c with P fraction bits for a raw value |x| < 2^XBits, calculated with up to 124 bits of c (as far as they
+		/// affect the result) in the signed type T. c has P + 1 bits, and x * c must fit: P <= value_bits<T> - XBits - 1.
+		template<typename T, long_constant C, int32_t XBits, int32_t P>
+		[[nodiscard]] inline constexpr T multiply_by_long_constant(const T x) noexcept
+		{
+			static_assert(P >= 0 && P <= 62 && XBits + P + 1 <= value_bits<T>);
+			// c = high / 2^P + low / 2^(P + E): x * low needs XBits + E bits
+			constexpr int32_t E = std::min({63, value_bits<T> - XBits, 124 - P});
+			constexpr auto high = static_cast<T>(C.bits(P, 63));
+			constexpr auto low = static_cast<T>(C.bits(P + E, E));
+			return static_cast<T>(x * high + ((x * low) >> E));
 		}
 
 		/// Polynomial approximations are evaluated with more fraction bits than the type has: in the signed type with
 		/// the width of B, keeping `IntegralBits` integral bits for the coefficients and intermediate values.
 		/// Products are calculated in the intermediate type I, so this costs no more than regular fixed-point products.
-		/// (Never fewer than F: for types with fewer integral bits than the polynomial needs, the results are only
-		/// meaningful where the intermediate values happen to fit, just as when evaluating in the type itself.)
-		template<typename B, int32_t IntegralBits, uint32_t F>
-		inline constexpr int32_t poly_bits = std::max(std::numeric_limits<std::make_signed_t<B>>::digits - IntegralBits, static_cast<int32_t>(F));
+		template<typename B, int32_t IntegralBits>
+		inline constexpr int32_t poly_bits = std::numeric_limits<std::make_signed_t<B>>::digits - IntegralBits;
 
-		/// Constant `value` in Q`q` (q >= M), rounded to QM
-		template<typename B, int32_t M>
-		[[nodiscard]] inline constexpr std::make_signed_t<B> poly_coefficient(const int64_t value, const int32_t q) noexcept
-		{
-			return static_cast<std::make_signed_t<B>>(q == M ? value : ((value >> (q - M - 1)) + 1) >> 1);
-		}
-
-		/// a * b in QM. Truncates: the few extra bits make rounding the intermediate steps unnecessary.
+		/// a * b in QM, rounded to nearest: truncating would add up to a bias of one unit per product
 		template<typename I, int32_t M, typename S>
 		[[nodiscard]] inline constexpr S poly_multiply(const S a, const S b) noexcept
 		{
-			return static_cast<S>((static_cast<I>(a) * b) >> M);
+			return static_cast<S>((static_cast<I>(a) * b + (I{1} << (M - 1))) >> M);
 		}
+
+		/// The coefficients (Q62) of a polynomial, in QM
+		template<typename B, int32_t M, std::size_t N>
+		[[nodiscard]] consteval std::array<std::make_signed_t<B>, N> poly_coefficients(const std::array<int64_t, N>& q62) noexcept
+		{
+			std::array<std::make_signed_t<B>, N> result{};
+			for(std::size_t i = 0; i < N; ++i)
+				result[i] = round_constant<std::make_signed_t<B>>(q62[i], 62, M);
+			return result;
+		}
+
+		/// The polynomial with coefficients `c` (lowest order first) at x, in QM.
+		/// Estrin's scheme: shorter dependency chains than Horner's, so more of the products are calculated in parallel.
+		template<typename I, int32_t M, typename S, std::size_t N>
+		[[nodiscard]] inline constexpr S estrin(const std::array<S, N>& c, const S x) noexcept
+		{
+			if constexpr(N == 1)
+				return c[0];
+			else
+			{
+				// c0 + c1 x, c2 + c3 x, ...: a polynomial in x^2
+				constexpr std::size_t pairs = (N + 1) / 2;
+				const auto pair = [&](const std::size_t i)
+				{
+					return (2 * i + 1 < N) ? static_cast<S>(c[2 * i] + poly_multiply<I, M, S>(c[2 * i + 1], x)) : c[2 * i];
+				};
+				const auto next = [&]<std::size_t... Index>(std::index_sequence<Index...>)
+				{
+					return std::array<S, pairs>{pair(Index)...};
+				}(std::make_index_sequence<pairs>{});
+				return estrin<I, M, S, pairs>(next, poly_multiply<I, M, S>(x, x));
+			}
+		}
+
+		/// The polynomial approximations (see polynomials.hpp) with at least `Bits` bits of precision, in QM
+		template<typename B, int32_t M, int32_t Bits>
+		inline constexpr auto exp2_coefficients = poly_coefficients<B, M>(exp2_polynomial<exp2_precision.degree_for(Bits)>);
+		template<typename B, int32_t M, int32_t Bits>
+		inline constexpr auto log2_coefficients = poly_coefficients<B, M>(log2_polynomial<log2_precision.degree_for(Bits)>);
+		template<typename B, int32_t M, int32_t Bits>
+		inline constexpr auto sin_coefficients = poly_coefficients<B, M>(sin_polynomial<sin_precision.degree_for(Bits)>);
+		template<typename B, int32_t M, int32_t Bits>
+		inline constexpr auto atan_coefficients = poly_coefficients<B, M>(atan_polynomial<atan_precision.degree_for(Bits)>);
+
+		/// The precision to aim for in a result with F fraction bits: three more bits than the result, so the approximation's error
+		/// adds at most 1/8 unit to the rounding error. But at most one bit more than the evaluation's M bits, which limit
+		/// the precision anyway.
+		template<uint32_t F, int32_t M>
+		inline constexpr int32_t target_bits = std::min(static_cast<int32_t>(F) + 3, M + 1);
 
 		/// Splits x into floor(x) and the fraction x - floor(x) in [0, 1)
 		template<typename B, typename I, uint32_t F, bool R>
@@ -469,6 +568,94 @@ namespace fpm
 		return result;
 	}
 
+	namespace detail
+	{
+		/// 2^(z / 2^Z) for z with Z fraction bits, rounded to nearest. Results too large to represent saturate to the maximum,
+		/// results too small to represent are 0.
+		template<typename B, typename I, uint32_t F, bool R, int32_t Z>
+		[[nodiscard]] inline constexpr fixed<B, I, F, R> exp2_fixed_point(const signed_intermediate<I> z) noexcept
+		{
+			using Fixed = fixed<B, I, F, R>;
+			using SI = signed_intermediate<I>;
+			using S = std::make_signed_t<B>;
+			using U = std::make_unsigned_t<B>;
+
+			// z = n + f, with integer n and f in [0, 1)
+			const SI n = z >> Z; // arithmetic shift: rounds towards negative infinity
+			if(n > std::numeric_limits<B>::digits - static_cast<int32_t>(F) - 1) [[unlikely]]
+				return std::numeric_limits<Fixed>::max(); // 2^z >= 2^(n) would not fit
+			if(n < -static_cast<SI>(F) - 1) [[unlikely]]
+				return Fixed(0); // 2^z < 2^-(F + 1) rounds to 0
+
+			// 2^f = 1 + f Q(f) in [1, 2), with M fraction bits. Precise to the last of them: the largest results use them all.
+			constexpr int32_t M = poly_bits<B, 1>;
+			constexpr auto& coefficients = exp2_coefficients<B, M, M + 1>;
+			const auto f = static_cast<S>(shift_by<M - Z>(static_cast<SI>(z - (n << Z))));
+			const auto mantissa = static_cast<U>((U{1} << M) + static_cast<U>(poly_multiply<I, M, S>(f, estrin<I, M>(coefficients, f))));
+
+			// 2^n * 2^f is a shift of the mantissa, rounded to QF. The mantissa is positive and below 2^(M+1),
+			// so this is done in the unsigned type of the base's width. n is within the range checked above.
+			const int32_t shift = M - static_cast<int32_t>(F) - static_cast<int32_t>(n);
+			if(shift <= 0)
+				return Fixed::from_raw_value(static_cast<B>(static_cast<U>(mantissa << -shift)));
+			return Fixed::from_raw_value(static_cast<B>(static_cast<U>(static_cast<U>(mantissa >> (shift - 1)) + 1u) >> 1));
+		}
+
+		/// log2(x) = e + p, with integer e and p in [-1/2, 1/2] with M fraction bits
+		template<typename B>
+		struct log2_parts
+		{
+			int32_t e;
+			std::make_signed_t<B> p;
+		};
+
+		/// log2 of a positive raw value with F fraction bits, with a polynomial precise to `Bits` bits
+		template<typename B, uint32_t F, typename I, int32_t Bits>
+		[[nodiscard]] inline constexpr log2_parts<B> log2_split(const B raw) noexcept
+		{
+			assert(raw > 0);
+			using S = std::make_signed_t<B>;
+			using U = std::make_unsigned_t<B>;
+			constexpr int32_t M = poly_bits<B, 1>;
+
+			// Normalize to m in [1, 2), in QM: move the highest bit to the top, then down to bit M
+			constexpr int32_t top = std::numeric_limits<U>::digits - 1;
+			const auto value = static_cast<U>(raw);
+			const int32_t leading_zeros = std::countl_zero(value);
+			const auto m = static_cast<U>(static_cast<U>(value << leading_zeros) >> (top - M));
+
+			// Centered around 1, where the polynomial converges fastest: m / 2 for m >= sqrt(2), so t = m - 1 is in
+			// [sqrt(2)/2 - 1, sqrt(2) - 1]. log2(1 + t) = t Q(t).
+			constexpr auto sqrt2 = static_cast<U>(round_constant<S>(int64_t{6521908912666391106}, 62, M)); // sqrt(2) = 1.4142135623730950488
+			const int32_t upper = m >= sqrt2;
+			const auto t = static_cast<S>(static_cast<S>(m >> upper) - (S{1} << M));
+			constexpr auto& coefficients = log2_coefficients<B, M, Bits>;
+			return {
+				top - leading_zeros - static_cast<int32_t>(F) + upper,
+				poly_multiply<I, M, S>(t, estrin<I, M>(coefficients, t))
+			};
+		}
+
+		/// log2(x) * c for a constant 0 < c < 1 in Q63, rounded to nearest
+		template<int64_t ConstantQ63, typename B, typename I, uint32_t F, bool R>
+		[[nodiscard]] inline constexpr fixed<B, I, F, R> log2_times(const fixed<B, I, F, R> x) noexcept
+		{
+			using SI = signed_intermediate<I>;
+			constexpr int32_t M = poly_bits<B, 1>;
+			const auto [e, p] = log2_split<B, F, I, target_bits<F, M>>(x.raw_value());
+
+			// e * c + p * c, both products with as many fraction bits as the signed intermediate type allows.
+			// |e| <= 64, and |p| <= 2^(M-1) (as a raw value).
+			constexpr int32_t E = std::min(63, value_bits<SI> - 7);
+			constexpr int32_t P = std::min(63, value_bits<SI> - M + 1);
+			constexpr int32_t Q = std::min(E, M + P); // the fraction bits of the sum
+			const SI high = static_cast<SI>(e) * round_constant<SI>(ConstantQ63, 63, E);
+			const SI low = static_cast<SI>(p) * round_constant<SI>(ConstantQ63, 63, P);
+			const SI sum = shift_by<Q - E>(high) + shift_by<Q - M - P>(low);
+			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(round_shift<Q - static_cast<int32_t>(F)>(sum)));
+		}
+	}
+
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> pow(fixed<B, I, F, R> base, fixed<B, I, F, R> exp) noexcept
 	{
@@ -496,19 +683,32 @@ namespace fpm
 		// but that's too much work to figure out.
 		assert(base > Fixed(0));
 
-		// exp2(log2(base) * exp). The product can exceed the range of the type while the result is representable
-		// (e.g. tiny results), so it's calculated in the intermediate type and saturated.
-		const I product = static_cast<I>(log2(base).raw_value()) * exp.raw_value();
-		I exponent;
-		if constexpr(R)
-			exponent = (product + (I{1} << (F - 1))) >> F;
-		else
-			exponent = product / (I{1} << F); // truncate towards zero
-		if(exponent > static_cast<I>(std::numeric_limits<B>::max()))
+		// base^exp = 2^(exp * log2(base)). The product's error is amplified by the result, so log2(base) = e + p is
+		// calculated as precisely as the polynomial evaluation allows, and exp * e and exp * p are calculated exactly.
+		using SI = detail::signed_intermediate<I>;
+		constexpr int32_t M = detail::poly_bits<B, 1>;
+		const auto [e, p] = detail::log2_split<B, F, I, M + 1>(base.raw_value());
+		const auto y = static_cast<SI>(exp.raw_value());
+		const SI high = y * e; // QF
+		const SI low = y * p;  // Q(F+M)
+
+		// Only exponents within +-limit matter: beyond, the result saturates or is 0.
+		// |p| <= 1/2, so |exp * p| <= |exp * e| / 2 unless e == 0: if |high| > 2 * limit, the exponent is beyond the limit.
+		constexpr int32_t digits = std::numeric_limits<B>::digits;
+		constexpr SI limit = SI{digits + 2} << F;
+		if(high > 2 * limit) [[unlikely]]
 			return std::numeric_limits<Fixed>::max();
-		if(exponent < static_cast<I>(std::numeric_limits<B>::lowest()))
+		if(high < -2 * limit) [[unlikely]]
 			return Fixed(0);
-		return exp2(Fixed::from_raw_value(static_cast<B>(exponent)));
+
+		// The exponent in Q(F+K), with as many fraction bits as fit: up to 3 * limit
+		constexpr int32_t K = std::min(M, detail::value_bits<SI> - static_cast<int32_t>(F) - static_cast<int32_t>(std::bit_width(3u * (digits + 2))));
+		const SI low_k = detail::shift_by<K - M>(low);
+		if(low_k > (limit << K)) [[unlikely]]
+			return std::numeric_limits<Fixed>::max(); // only when e == 0
+		if(low_k < -(limit << K)) [[unlikely]]
+			return Fixed(0);
+		return detail::exp2_fixed_point<B, I, F, R, static_cast<int32_t>(F) + K>((high << K) + low_k);
 	}
 
 	/// e^x. Results too large to represent saturate to the maximum.
@@ -516,95 +716,31 @@ namespace fpm
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> exp(fixed<B, I, F, R> x) noexcept
 	{
 		using Fixed = fixed<B, I, F, R>;
-		constexpr auto max = std::numeric_limits<Fixed>::max();
+		using SI = detail::signed_intermediate<I>;
 
-		// e^x > 2^integral_bits > max  <=>  x > integral_bits * ln(2)
-		constexpr int32_t integral_bits = std::numeric_limits<B>::digits - static_cast<int32_t>(F);
-		constexpr auto ln2 = Fixed::template from_fixed_point<63>(int64_t{6393154322601327830}); // 0.69314718055994530942
-		constexpr auto overflow_threshold = ln2 * integral_bits;
-		if(x >= overflow_threshold) [[unlikely]]
-			return max;
-
+		// e^x = 2^(x * log2(e)). e^x > 2^x does not fit for x >= digits - F, and e^x < 2^-(F + 2) rounds to 0 for x <= -(F + 2).
+		constexpr int32_t digits = std::numeric_limits<B>::digits;
+		const auto raw = static_cast<SI>(x.raw_value());
+		if(raw >= (SI{digits - static_cast<int32_t>(F)} << F)) [[unlikely]]
+			return std::numeric_limits<Fixed>::max();
 		if constexpr(std::is_signed_v<B>)
 		{
-			// While e^-x is representable, 1 / e^-x is the most precise
-			if(x < Fixed(0) && x > -overflow_threshold)
-				return Fixed(1) / exp(-x);
+			if(raw <= -(SI{static_cast<int32_t>(F) + 2} << F)) [[unlikely]]
+				return Fixed(0);
 		}
 
-		// x = n + f, with integer n and f in [0, 1)
-		const auto [n, f] = detail::split_floor(x);
-		assert(f >= Fixed(0) && f < Fixed(1));
-
-		// e^f in [1, e), with M fraction bits
-		using S = std::make_signed_t<B>;
-		constexpr int32_t M = detail::poly_bits<B, 2, F>;
-		constexpr auto multiply = detail::poly_multiply<I, M, S>;
-		constexpr auto coefficient = detail::poly_coefficient<B, M>;
-		constexpr S fA = coefficient( int64_t{128239257017632854}, 63); // 1.3903728105644451e-2
-		constexpr S fB = coefficient( int64_t{320978614890280666}, 63); // 3.4800571158543038e-2
-		constexpr S fC = coefficient(int64_t{1571680799599592947}, 63); // 1.7040197373796334e-1
-		constexpr S fD = coefficient(int64_t{4603349000587966862}, 63); // 4.9909609871464493e-1
-		constexpr S fE = coefficient(int64_t{4612052447974689712}, 62); // 1.0000794567422495
-		constexpr S fF = coefficient(int64_t{9223361618412247875}, 63); // 9.9999887043019773e-1
-		const auto fm = static_cast<S>(static_cast<S>(f.raw_value()) << (M - static_cast<int32_t>(F)));
-		// Estrin's scheme: shorter dependency chains than Horner's
-		const S f2 = multiply(fm, fm);
-		const S f4 = multiply(f2, f2);
-		const S exp_f = multiply(multiply(fA, fm) + fB, f4) + multiply(multiply(fC, fm) + fD, f2) + (multiply(fE, fm) + fF);
-
-		// e^n: for n < 0 (tiny results) as (1/e)^-n, whose powers shrink so they cannot overflow
-		constexpr auto inv_e = Fixed::template from_fixed_point<63>(int64_t{3393088950634442637}); // 0.36787944117144232160
-		const Fixed exp_n = (n >= 0) ? pow(Fixed::e(), n) : pow(inv_e, -n);
-
-		// e^n * e^f, saturating in case the approximation error pushes the result just past the maximum
-		const I product = static_cast<I>(exp_n.raw_value()) * exp_f;
-		const I result = (product + (I{1} << (M - 1))) >> M;
-		return result > static_cast<I>(max.raw_value()) ? max : Fixed::from_raw_value(static_cast<B>(result));
+		// Now |raw| < 2^(F + range): the product with log2(e) can have P fraction bits
+		constexpr int32_t range = static_cast<int32_t>(std::bit_width(static_cast<uint32_t>(std::max(digits - static_cast<int32_t>(F), static_cast<int32_t>(F) + 2))));
+		constexpr int32_t XBits = static_cast<int32_t>(F) + range;
+		constexpr int32_t P = std::min(62, detail::value_bits<SI> - XBits - 1);
+		return detail::exp2_fixed_point<B, I, F, R, static_cast<int32_t>(F) + P>(detail::multiply_by_long_constant<SI, detail::log2_e, XBits, P>(raw));
 	}
 
 	/// 2^x. Results too large to represent saturate to the maximum.
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> exp2(fixed<B, I, F, R> x) noexcept
 	{
-		using Fixed = fixed<B, I, F, R>;
-
-		// x = n + f, with integer n and f in [0, 1)
-		const auto [n, f] = detail::split_floor(x);
-		assert(f >= Fixed(0) && f < Fixed(1));
-
-		// 2^n * 2^f is a shift of 2^f
-		if(n >= 0 && n > std::numeric_limits<B>::digits - static_cast<int32_t>(F) - 1) [[unlikely]]
-			return std::numeric_limits<Fixed>::max(); // 2^f >= 1 would be shifted out of range
-
-		// 2^f in [1, 2), with M fraction bits
-		using S = std::make_signed_t<B>;
-		constexpr int32_t M = detail::poly_bits<B, 1, F>;
-		constexpr auto multiply = detail::poly_multiply<I, M, S>;
-		constexpr auto coefficient = detail::poly_coefficient<B, M>;
-		constexpr S fA = coefficient(  int64_t{17491766697771214}, 63); // 1.8964611454333148e-3
-		constexpr S fB = coefficient(  int64_t{82483038782406547}, 63); // 8.9428289841091295e-3
-		constexpr S fC = coefficient( int64_t{515275173969157690}, 63); // 5.5866246304520701e-2
-		constexpr S fD = coefficient(int64_t{2214897896212987987}, 63); // 2.4013971109076949e-1
-		constexpr S fE = coefficient(int64_t{6393224161192452326}, 63); // 6.9315475247516736e-1
-		constexpr S fF = coefficient(int64_t{9223371050976163566}, 63); // 9.9999989311082668e-1
-		const auto fm = static_cast<S>(static_cast<S>(f.raw_value()) << (M - static_cast<int32_t>(F)));
-		// Estrin's scheme: shorter dependency chains than Horner's
-		const S f2 = multiply(fm, fm);
-		const S f4 = multiply(f2, f2);
-		const S exp2_f = multiply(multiply(fA, fm) + fB, f4) + multiply(multiply(fC, fm) + fD, f2) + (multiply(fE, fm) + fF);
-
-		// Result in QF: exp2_f * 2^n / 2^(M-F), rounded to nearest. exp2_f is positive and below 2^(M+1),
-		// so this is done in the unsigned type of the base's width (no wider arithmetic needed).
-		// n is below the range checked above, and results below 2^-(F+1) round to zero, so the shift fits in 32 bits.
-		if(n < -static_cast<B>(F) - 1) [[unlikely]]
-			return Fixed(0);
-		using U = std::make_unsigned_t<B>;
-		const auto mantissa = static_cast<U>(exp2_f);
-		const int32_t shift = M - static_cast<int32_t>(F) - static_cast<int32_t>(n);
-		if(shift <= 0)
-			return Fixed::from_raw_value(static_cast<B>(static_cast<U>(mantissa << -shift)));
-		return Fixed::from_raw_value(static_cast<B>(static_cast<U>(static_cast<U>(mantissa >> (shift - 1)) + 1u) >> 1));
+		return detail::exp2_fixed_point<B, I, F, R, static_cast<int32_t>(F)>(static_cast<detail::signed_intermediate<I>>(x.raw_value()));
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -619,55 +755,24 @@ namespace fpm
 		using Fixed = fixed<B, I, F, R>;
 		assert(x > Fixed(0));
 
-		// The polynomial is evaluated with M fraction bits (see detail::poly_bits). Its argument t = x - 1 is in [0, 1),
-		// and all intermediate values are below 2, so it needs just one integral bit.
-		using S = std::make_signed_t<B>;
-		constexpr int32_t M = detail::poly_bits<B, 1, F>;
-		constexpr auto multiply = detail::poly_multiply<I, M, S>;
-		constexpr auto coefficient = detail::poly_coefficient<B, M>;
-
-		// Normalize input to the [1:2) domain, in QM: move the highest bit to the top, then down to bit M
-		using U = std::make_unsigned_t<B>;
-		constexpr int32_t top = std::numeric_limits<U>::digits - 1;
-		const auto value = static_cast<U>(x.raw_value());
-		const int32_t leading_zeros = std::countl_zero(value);
-		const int32_t highest = top - leading_zeros;
-		const auto mantissa = static_cast<S>(static_cast<U>(static_cast<U>(value << leading_zeros) >> (top - M)));
-		assert(mantissa >= (S{1} << M) && mantissa - (S{1} << M) < (S{1} << M));
-		const auto t = static_cast<S>(mantissa - (S{1} << M));
-
-		// Fifth-order polynomial approximation of log2(1 + t), evaluated with Estrin's scheme (shorter dependency chains than Horner's).
-		// Mathematically identical to the original polynomial in x = 1 + t:
-		//   4.4873610194131727e-2 x^5 - 4.1656368651734915e-1 x^4 + 1.6311487636297217 x^3
-		//   - 3.5507929249026341 x^2 + 5.0917108110420042 x - 2.8003640347009253
-		constexpr S c0 = coefficient(     int64_t{57824754770287}, 62); //  1.253874494907734e-05
-		constexpr S c1 = coefficient( int64_t{6648596514624850418}, 62); //  1.441684557027163
-		constexpr S c2 = coefficient(-int64_t{3265039810578835332}, 62); // -0.70799265117624666
-		constexpr S c3 = coefficient( int64_t{1907532238906173757}, 62); //  0.41363011950164236
-		constexpr S c4 = coefficient( -int64_t{886345925253438523}, 62); // -0.1921956355466905
-		constexpr S c5 = coefficient(  int64_t{206943000728637990}, 62); //  0.044873610194131726
-		const S t2 = multiply(t, t);
-		const S t4 = multiply(t2, t2);
-		const S fraction = multiply(multiply(c5, t) + c4, t4) + multiply(multiply(c3, t) + c2, t2) + (multiply(c1, t) + c0);
-
-		// Integral part plus the fraction, rounded from QM to QF
-		constexpr int32_t shift = M - static_cast<int32_t>(F);
-		const I fraction_f = (shift == 0) ? I{fraction} : ((static_cast<I>(fraction) + (I{1} << (shift > 0 ? shift - 1 : 0))) >> shift);
-		return Fixed::from_raw_value(static_cast<B>((static_cast<I>(highest - static_cast<int32_t>(F)) << F) + fraction_f));
+		// e + p, rounded from QM to QF
+		constexpr int32_t M = detail::poly_bits<B, 1>;
+		const auto [e, p] = detail::log2_split<B, F, I, detail::target_bits<F, M>>(x.raw_value());
+		return Fixed::from_raw_value(static_cast<B>((static_cast<I>(e) << F) + detail::round_shift<M - static_cast<int32_t>(F)>(static_cast<I>(p))));
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> log(fixed<B, I, F, R> x) noexcept
 	{
-		// ln(x) = log2(x) * ln(2)
-		return detail::multiply_by_constant<int64_t{6393154322601327830}>(log2(x)); // ln(2) = 0.69314718055994530942
+		assert(x.raw_value() > 0);
+		return detail::log2_times<int64_t{6393154322601327830}>(x); // ln(2) = 0.69314718055994530942
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> log10(fixed<B, I, F, R> x) noexcept
 	{
-		// log10(x) = log2(x) * log10(2)
-		return detail::multiply_by_constant<int64_t{2776511644261678566}>(log2(x)); // log10(2) = 0.30102999566398119521
+		assert(x.raw_value() > 0);
+		return detail::log2_times<int64_t{2776511644261678566}>(x); // log10(2) = 0.30102999566398119521
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -829,205 +934,230 @@ namespace fpm
 
 	namespace detail
 	{
-		/// x / (π/2) modulo 4: the angle in quarter turns, as a raw value with F fraction bits in [0, 4 * 2^F).
-		/// A single multiplication with a precise 2/π, so there is no division and the reduction stays accurate
+		/// π/2 (Q62), which is also π in Q61
+		inline constexpr int64_t half_pi_q62 = int64_t{7244019458077122842}; // π/2 = 1.5707963267948966192
+
+		/// x / (π/2) modulo 4: the angle in quarter turns, as the quadrant (0 to 3) and the position within it in [0, 1),
+		/// with Z = quarter_turn_bits<B, I, F> fraction bits (more than M) in the signed intermediate type.
+		/// A multiplication with a precise 2/π (up to 124 bits), so there is no division and the reduction stays accurate
 		/// for large arguments. The modulo is a mask of the two's complement intermediate value.
-		template<typename B, typename I, uint32_t F, bool R>
-		[[nodiscard]] inline constexpr I quarter_turns(const fixed<B, I, F, R> x) noexcept
+		template<typename I>
+		struct quarter_turns_result
 		{
-			constexpr int32_t P = constant_precision<B, I>;
-			constexpr I two_over_pi = precise_constant<B, I, int64_t{5871781006564002453}>; // 2/π = 0.63661977236758134308
-			const I turns = (static_cast<I>(x.raw_value()) * two_over_pi + (I{1} << (P - 1))) >> P;
-			return turns & ((I{4} << F) - 1);
+			int32_t quadrant;
+			signed_intermediate<I> position;
+		};
+
+		/// The fraction bits of the product of a raw value with 2/π
+		template<typename B, typename I, uint32_t F>
+		inline constexpr int32_t quarter_turn_bits = static_cast<int32_t>(F) + std::min(62, value_bits<signed_intermediate<I>> - std::numeric_limits<std::make_unsigned_t<B>>::digits - 1);
+
+		template<typename B, typename I, uint32_t F, bool R>
+		[[nodiscard]] inline constexpr quarter_turns_result<I> quarter_turns(const fixed<B, I, F, R> x) noexcept
+		{
+			using SI = signed_intermediate<I>;
+			constexpr int32_t XBits = std::numeric_limits<std::make_unsigned_t<B>>::digits;
+			constexpr int32_t Z = quarter_turn_bits<B, I, F>;
+			const SI turns = multiply_by_long_constant<SI, two_over_pi, XBits, Z - static_cast<int32_t>(F)>(static_cast<SI>(x.raw_value()));
+			return {static_cast<int32_t>((turns >> Z) & 3), static_cast<SI>(turns & ((SI{1} << Z) - 1))};
 		}
 
-		/// sin(u * π/2) for a raw angle `u` in quarter turns in [0, 4 * 2^F)
-		template<typename B, typename I, uint32_t F, bool R>
-		[[nodiscard]] inline constexpr fixed<B, I, F, R> sin_quarter_turns(I u) noexcept
+		/// sin(u * π/2) / u for u^2 in [0, 1] (QM), in QM, with `Bits` bits of precision
+		template<typename B, typename I, int32_t Bits>
+		[[nodiscard]] inline constexpr std::make_signed_t<B> sin_quotient(const std::make_signed_t<B> u_squared) noexcept
 		{
-			// This sine uses a fifth-order curve-fitting approximation originally
-			// described by Jasper Vijn on coranac.com which has a worst-case
-			// relative error of 0.07% (over [-pi:pi]).
-			using Fixed = fixed<B, I, F, R>;
-			constexpr I one = I{1} << F;
+			constexpr int32_t M = poly_bits<B, 1>;
+			return estrin<I, M>(sin_coefficients<B, M, Bits>, u_squared);
+		}
 
-			bool negative = false;
-			if(u > 2 * one)
-			{
-				// Reduce domain to [0..2].
-				negative = true;
-				u -= 2 * one;
-			}
+		/// sin(u * π/2) for u in [0, 1], in QM
+		template<typename B, typename I, int32_t Bits>
+		[[nodiscard]] inline constexpr std::make_signed_t<B> sin_first_quadrant(const std::make_signed_t<B> u) noexcept
+		{
+			using S = std::make_signed_t<B>;
+			constexpr int32_t M = poly_bits<B, 1>;
+			return poly_multiply<I, M, S>(u, sin_quotient<B, I, Bits>(poly_multiply<I, M, S>(u, u)));
+		}
 
-			if(u > one)
-			{
-				// Reduce domain to [0..1].
-				u = 2 * one - u;
-			}
+		/// sin of an angle in quarter turns, rounded to QF
+		template<typename B, typename I, uint32_t F, bool R>
+		[[nodiscard]] inline constexpr fixed<B, I, F, R> sin_quarter_turns(const int32_t quadrant, const signed_intermediate<I> position) noexcept
+		{
+			using S = std::make_signed_t<B>;
+			constexpr int32_t M = poly_bits<B, 1>;
 
-			const auto x = Fixed::from_raw_value(static_cast<B>(u));
-			const Fixed x2 = x*x;
-			// Compile-time constants. Subtracted with modular arithmetic, so this is a valid constant expression
-			// even for types that cannot represent them (e.g. a single integral bit), like at runtime.
-			using U = std::make_unsigned_t<B>;
-			constexpr auto subtract = [](const Fixed x, const Fixed y)
-			{
-				return Fixed::from_raw_value(static_cast<B>(static_cast<U>(static_cast<U>(x.raw_value()) - static_cast<U>(y.raw_value()))));
-			};
-			constexpr Fixed a = Fixed::pi();
-			constexpr Fixed b = subtract(Fixed::two_pi(), Fixed(5));
-			constexpr Fixed c = subtract(Fixed::pi(), Fixed(3));
-			const Fixed result = x * (a - x2*(b - x2*c))/2;
+			// In the odd quadrants the sine decreases again: sin(1 - u), and in the second half it's negative
+			const auto p = static_cast<S>(shift_by<M - quarter_turn_bits<B, I, F>>(position));
+			const auto u = static_cast<S>((quadrant & 1) != 0 ? (S{1} << M) - p : p);
+			const auto result = static_cast<B>(round_shift<M - static_cast<int32_t>(F)>(static_cast<I>(sin_first_quadrant<B, I, target_bits<F, M>>(u))));
 			// (Negated via the raw value, so this compiles for unsigned base types as well)
-			return negative ? Fixed::from_raw_value(static_cast<B>(B{0} - result.raw_value())) : result;
+			return fixed<B, I, F, R>::from_raw_value((quadrant & 2) != 0 ? static_cast<B>(B{0} - result) : result);
 		}
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> sin(fixed<B, I, F, R> x) noexcept
 	{
-		return detail::sin_quarter_turns<B, I, F, R>(detail::quarter_turns(x));
+		const auto [quadrant, position] = detail::quarter_turns(x);
+		return detail::sin_quarter_turns<B, I, F, R>(quadrant, position);
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> cos(fixed<B, I, F, R> x) noexcept
 	{
 		// cos(x) = sin(x + π/2): one more quarter turn
-		constexpr I mask = (I{4} << F) - 1;
-		return detail::sin_quarter_turns<B, I, F, R>((detail::quarter_turns(x) + (I{1} << F)) & mask);
+		const auto [quadrant, position] = detail::quarter_turns(x);
+		return detail::sin_quarter_turns<B, I, F, R>(quadrant + 1, position);
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> tan(fixed<B, I, F, R> x) noexcept
 	{
-		constexpr I mask = (I{4} << F) - 1;
-		const I u = detail::quarter_turns(x);
-		const auto cx = detail::sin_quarter_turns<B, I, F, R>((u + (I{1} << F)) & mask);
+		using Fixed = fixed<B, I, F, R>;
+		using S = std::make_signed_t<B>;
+		using SI = detail::signed_intermediate<I>;
+		constexpr int32_t M = detail::poly_bits<B, 1>;
+		constexpr int32_t Z = detail::quarter_turn_bits<B, I, F>;
+
+		// tan = sin(u) / cos(u) = sin(u) / sin(1 - u) in quarter turns. In the odd quadrants, -cos(u) / sin(u).
+		// The result has up to all the bits of the type, so the polynomials are as precise as the evaluation allows.
+		const auto [quadrant, position] = detail::quarter_turns(x);
+		const bool odd = (quadrant & 1) != 0;
+		const SI numerator = odd ? (SI{1} << Z) - position : position;
+		const SI denominator = (SI{1} << Z) - numerator;
 
 		// Tangent goes to infinity at 90 and -90 degrees.
 		// We can't represent that with fixed-point maths.
-		assert(abs(cx).raw_value() > 1);
+		assert(denominator > 0);
 
-		return detail::sin_quarter_turns<B, I, F, R>(u) / cx;
+		const S sine = detail::sin_first_quadrant<B, I, M + 1>(static_cast<S>(detail::shift_by<M - Z>(numerator)));
+
+		// Where the tangent is large, the cosine is small: calculated with k more fraction bits, as far as the division allows
+		// (sine << (F + k) must fit) and as the reduced angle has them. sin(v) = v Q(v^2) for the denominator's angle v.
+		constexpr int32_t k_max = std::min(detail::value_bits<SI> - 1 - M - static_cast<int32_t>(F), Z - M);
+		const int32_t k = std::clamp(Z - 1 - detail::find_highest_bit(denominator), 0, k_max);
+		const auto v = static_cast<S>(denominator >> (Z - M - k)); // Q(M+k), below 2^M
+		const auto v_m = static_cast<S>(v >> k);
+		const S cosine = detail::poly_multiply<I, M, S>(v, detail::sin_quotient<B, I, M + 1>(detail::poly_multiply<I, M, S>(v_m, v_m)));
+
+		// |tan| = sine / cosine in QF, rounded to nearest, saturated to the maximum
+		const SI magnitude = ((static_cast<SI>(sine) << (static_cast<int32_t>(F) + k)) + cosine / 2) / cosine;
+		constexpr auto max = std::numeric_limits<Fixed>::max();
+		const B result = magnitude > static_cast<SI>(max.raw_value()) ? max.raw_value() : static_cast<B>(magnitude);
+		// (Negated via the raw value, so this compiles for unsigned base types as well)
+		return Fixed::from_raw_value(odd ? static_cast<B>(B{0} - result) : result);
 	}
 
 	namespace detail
 	{
-
-		/// Calculates atan(x) assuming that x is in the range [0,1].
-		template<typename B, typename I, uint32_t F, bool R>
-		[[nodiscard]] inline constexpr fixed<B, I, F, R> atan_sanitized(fixed<B, I, F, R> x) noexcept
+		/// atan(x) for x in [0, 1] in QM, in QM
+		template<typename B, typename I, uint32_t F>
+		[[nodiscard]] inline constexpr std::make_signed_t<B> atan_first_octant(const std::make_signed_t<B> x) noexcept
 		{
-			using Fixed = fixed<B, I, F, R>;
-			assert(x >= Fixed(0) && x <= Fixed(1));
-
-			// Evaluated with extra fraction bits (see poly_bits): all values are within [-1, 1]
 			using S = std::make_signed_t<B>;
-			constexpr int32_t M = poly_bits<B, 1, F>;
-			constexpr auto multiply = poly_multiply<I, M, S>;
-			constexpr auto coefficient = poly_coefficient<B, M>;
-			constexpr S fA = coefficient(  int64_t{716203666280654660}, 63); //  0.0776509570923569
-			constexpr S fB = coefficient(-int64_t{2651115102768076601}, 63); // -0.287434475393028
-			constexpr S fC = coefficient( int64_t{9178930894564541004}, 63); //  0.995181681698119  (PI/4 - A - B)
-
-			const auto xm = static_cast<S>(static_cast<S>(x.raw_value()) << (M - static_cast<int32_t>(F)));
-			const S xx = multiply(xm, xm);
-			const S result = multiply(static_cast<S>(multiply(static_cast<S>(multiply(fA, xx) + fB), xx) + fC), xm);
-
-			// Round from QM to QF, in S: the result is at most 1 (2^M), so adding half a unit cannot overflow
-			constexpr int32_t shift = M - static_cast<int32_t>(F);
-			if constexpr(shift == 0)
-				return Fixed::from_raw_value(static_cast<B>(result));
-			else
-				return Fixed::from_raw_value(static_cast<B>(static_cast<S>(result + (S{1} << (shift - 1))) >> shift));
+			constexpr int32_t M = poly_bits<B, 1>;
+			constexpr auto& coefficients = atan_coefficients<B, M, target_bits<F, M>>;
+			return poly_multiply<I, M, S>(x, estrin<I, M>(coefficients, poly_multiply<I, M, S>(x, x)));
 		}
 
-		/// Calculate atan(y / x), assuming x != 0.
-		///
-		/// If x is very, very small, y/x can easily overflow the fixed-point range.
-		/// If q = y/x and q > 1, atan(q) would calculate atan(1/q) as intermediate step
-		/// anyway. We can shortcut that here and avoid the loss of information, thus
-		/// improving the accuracy of atan(y/x) for very small x.
-		template<typename B, typename I, uint32_t F, bool R>
-		[[nodiscard]] inline constexpr fixed<B, I, F, R> atan_div(fixed<B, I, F, R> y, fixed<B, I, F, R> x) noexcept
+		/// atan(a / b) for a, b >= 0 (not both 0) with the same scale, in QM (in [0, π/2]).
+		/// The argument of the polynomial is the smaller over the larger, calculated with M fraction bits.
+		template<typename B, typename I, uint32_t F>
+		[[nodiscard]] inline constexpr I atan_ratio(const I a, const I b) noexcept
 		{
-			using Fixed = fixed<B, I, F, R>;
-			assert(x != Fixed(0));
+			using S = std::make_signed_t<B>;
+			constexpr int32_t M = poly_bits<B, 1>;
 
-			// Make sure y and x are positive.
-			// If y / x is negative (when y or x, but not both, are negative), negate the result to
-			// keep the correct outcome.
-			if(y < Fixed(0))
-			{
-				if(x < Fixed(0))
-				{
-					return atan_div(-y, -x);
-				}
-				return -atan_div(-y, x);
-			}
-			if(x < Fixed(0))
-			{
-				return -atan_div(y, -x);
-			}
-			assert(y >= Fixed(0));
-			assert(x >  Fixed(0));
-
-			if(y > x)
-			{
-				return Fixed::half_pi() - detail::atan_sanitized(x / y);
-			}
-			return detail::atan_sanitized(y / x);
+			// For a > b: atan(a / b) = π/2 - atan(b / a). (A single polynomial evaluation, to keep the code small.)
+			const bool swap = a > b;
+			const I numerator = swap ? b : a;
+			const I denominator = swap ? a : b;
+			const I angle = atan_first_octant<B, I, F>(static_cast<S>(((numerator << M) + denominator / 2) / denominator));
+			return swap ? static_cast<I>(round_constant<I>(half_pi_q62, 62, M) - angle) : angle;
 		}
 
+		/// raw < 0 (without warnings for unsigned types)
+		template<typename B>
+		[[nodiscard]] inline constexpr bool is_negative(const B raw) noexcept
+		{
+			if constexpr(std::is_signed_v<B>)
+				return raw < 0;
+			else
+				return false;
+		}
+
+		/// |x| of a raw value, in the intermediate type (where it cannot overflow)
+		template<typename B, typename I>
+		[[nodiscard]] inline constexpr I magnitude(const B raw) noexcept
+		{
+			if constexpr(std::is_signed_v<B>)
+				return raw < 0 ? -static_cast<I>(raw) : static_cast<I>(raw);
+			else
+				return static_cast<I>(raw);
+		}
+
+		/// An angle in QM (in the intermediate type), rounded to QF
+		template<typename B, typename I, uint32_t F, bool R>
+		[[nodiscard]] inline constexpr fixed<B, I, F, R> angle_to_fixed(const I angle) noexcept
+		{
+			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(round_shift<poly_bits<B, 1> - static_cast<int32_t>(F)>(angle)));
+		}
+
+		/// asin(x) in QM (in the intermediate type)
+		template<typename B, typename I, uint32_t F, bool R>
+		[[nodiscard]] inline constexpr I asin_angle(const fixed<B, I, F, R> x) noexcept
+		{
+			constexpr int32_t M = poly_bits<B, 1>;
+
+			// asin(x) = atan(x / sqrt(1 - x^2)), with sqrt(1 - x^2) exactly rounded to QM:
+			// the raw value of 1 - x^2 in Q(2F) is 2^(2F) - X^2 for the raw value X
+			const I a = magnitude<B, I>(x.raw_value());
+			const I root = sqrt_rounded(shift_by<2 * (M - static_cast<int32_t>(F))>(static_cast<I>((I{1} << (2 * F)) - a * a)));
+			const I angle = atan_ratio<B, I, F>(shift_by<M - static_cast<int32_t>(F)>(a), root);
+			return is_negative(x.raw_value()) ? static_cast<I>(-angle) : angle;
+		}
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> atan(fixed<B, I, F, R> x) noexcept
 	{
-		using Fixed = fixed<B, I, F, R>;
-		if(x < Fixed(0))
-		{
-			return -atan(-x);
-		}
+		using S = std::make_signed_t<B>;
+		constexpr int32_t M = detail::poly_bits<B, 1>;
 
-		if(x > Fixed(1))
-		{
-			return Fixed::half_pi() - detail::atan_sanitized(1 / x);
-		}
-
-		return detail::atan_sanitized(x);
+		// atan(x) directly for |x| <= 1 (no division), as π/2 - atan(1 / x) beyond
+		const I a = detail::magnitude<B, I>(x.raw_value());
+		constexpr I one = I{1} << F;
+		const bool large = a > one;
+		const auto argument = large
+			? static_cast<S>(((one << M) + a / 2) / a)
+			: static_cast<S>(detail::shift_by<M - static_cast<int32_t>(F)>(a));
+		const I result = detail::atan_first_octant<B, I, F>(argument);
+		constexpr I half_pi = detail::round_constant<I>(detail::half_pi_q62, 62, M);
+		const I angle = large ? static_cast<I>(half_pi - result) : result;
+		return detail::angle_to_fixed<B, I, F, R>(detail::is_negative(x.raw_value()) ? static_cast<I>(-angle) : angle);
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> asin(fixed<B, I, F, R> x) noexcept
 	{
-		using Fixed = fixed<B, I, F, R>;
+		using Fixed [[maybe_unused]] = fixed<B, I, F, R>;
 		assert(x <= Fixed(+1));
 		if constexpr(std::is_signed_v<B>)
 			assert(x >= Fixed(-1));
-
-		const auto yy = 1 - x * x;
-		if(yy == Fixed(0))
-		{
-			return copysign(Fixed::half_pi(), x);
-		}
-		return detail::atan_div(x, sqrt(yy));
+		return detail::angle_to_fixed<B, I, F, R>(detail::asin_angle(x));
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> acos(fixed<B, I, F, R> x) noexcept
 	{
-		using Fixed = fixed<B, I, F, R>;
+		using Fixed [[maybe_unused]] = fixed<B, I, F, R>;
 		assert(x <= Fixed(+1));
 		if constexpr(std::is_signed_v<B>)
 			assert(x >= Fixed(-1));
 
-		if(std::is_signed_v<B> && x == -Fixed(1))
-		{
-			return Fixed::pi();
-		}
-		const auto yy = 1 - x * x;
-		return 2*detail::atan_div(sqrt(yy), Fixed(1) + x);
+		// acos(x) = π/2 - asin(x): asin's absolute error is so small that this is precise even where acos(x) is small
+		constexpr I half_pi = detail::round_constant<I>(detail::half_pi_q62, 62, detail::poly_bits<B, 1>);
+		return detail::angle_to_fixed<B, I, F, R>(static_cast<I>(half_pi - detail::asin_angle(x)));
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -1040,13 +1170,17 @@ namespace fpm
 			return (y > Fixed(0)) ? Fixed::half_pi() : -Fixed::half_pi();
 		}
 
-		auto ret = detail::atan_div(y, x);
-
-		if(x < Fixed(0))
+		// atan(|y| / |x|) in [0, π/2], then mirrored into the quadrant of (x, y)
+		I angle = detail::atan_ratio<B, I, F>(detail::magnitude<B, I>(y.raw_value()), detail::magnitude<B, I>(x.raw_value()));
+		if constexpr(std::is_signed_v<B>)
 		{
-			return (y >= Fixed(0)) ? ret + Fixed::pi() : ret - Fixed::pi();
+			constexpr I pi = detail::round_constant<I>(detail::half_pi_q62, 61, detail::poly_bits<B, 1>);
+			if(x.raw_value() < 0)
+				angle = pi - angle;
+			if(y.raw_value() < 0)
+				angle = -angle;
 		}
-		return ret;
+		return detail::angle_to_fixed<B, I, F, R>(angle);
 	}
 
 #pragma endregion

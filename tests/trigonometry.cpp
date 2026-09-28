@@ -82,10 +82,9 @@ TEST(trigonometry, tan)
 		EXPECT_TRUE(HasMaximumError(tan_fixed, tan_real, MAX_ERROR_PERC)) << ", raw_value=" << raw_value << ", error=" << std::abs(diff/tan_real)*100 << "%";
 	}
 
-#ifndef NDEBUG
-	EXPECT_DEATH(auto v = tan(P::pi()/2), "");
-	EXPECT_DEATH(auto v = tan(-P::pi()/2), "");
-#endif
+	// π/2 is not representable: the tangent of the nearest value is finite, but too large for the type, so it saturates
+	EXPECT_EQ(std::numeric_limits<P>::max(), tan(P::pi()/2));
+	EXPECT_EQ(-std::numeric_limits<P>::max(), tan(-P::pi()/2));
 }
 
 TEST(trigonometry, atan)

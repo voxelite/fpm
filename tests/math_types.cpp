@@ -17,10 +17,15 @@ namespace
 	template<typename P>
 	constexpr long double max_value = static_cast<long double>(std::numeric_limits<P>::max());
 
-	/// Fraction bits of the polynomial evaluations for `IntegralBits` integral bits (see fpm::detail::poly_bits)
-	template<typename P, int IntegralBits>
-	inline const long double poly_eps = std::ldexp(1.0L, -std::max<int>(
-		std::numeric_limits<std::make_signed_t<typename P::base_type>>::digits - IntegralBits, P::fraction_bits));
+	/// The resolution of the polynomial evaluations: M = digits - 1 fraction bits (see fpm::detail::poly_bits)
+	template<typename P>
+	inline const long double poly_eps = std::ldexp(1.0L, 1 - std::numeric_limits<std::make_signed_t<typename P::base_type>>::digits);
+
+	/// The error bound of the approximations with results of at most 1 in magnitude (so absolute errors):
+	/// half an epsilon for the rounding, 1/8 epsilon for the polynomial's own error (see fpm::detail::target_bits),
+	/// plus a few units of the evaluation's precision
+	template<typename P>
+	inline const long double approximation_error = 0.625L * eps<P> + 8 * poly_eps<P>;
 
 	template<typename P>
 	long double ld(const P x)
@@ -188,51 +193,65 @@ TYPED_TEST(math_types, remainders)
 TYPED_TEST(math_types, sin_cos_tan)
 {
 	using P = TypeParam;
-	// The polynomial's error is below 4e-4; range reduction is precise for all arguments
-	const long double tolerance = 5e-4L + 2 * eps<P>;
+	// The range reduction is precise for all arguments
 	for(const auto x : raw_values<P>(true))
 	{
-		ASSERT_TRUE(within(ld(sin(x)), std::sin(ld(x)), tolerance)) << "sin(" << ld(x) << ")";
-		ASSERT_TRUE(within(ld(cos(x)), std::cos(ld(x)), tolerance)) << "cos(" << ld(x) << ")";
+		ASSERT_TRUE(within(ld(sin(x)), std::sin(ld(x)), approximation_error<P>)) << "sin(" << ld(x) << ")";
+		ASSERT_TRUE(within(ld(cos(x)), std::cos(ld(x)), approximation_error<P>)) << "cos(" << ld(x) << ")";
 	}
-	for(const auto x : values<P>(-1.3L, 1.3L))
+	for(const auto x : values<P>(-1.5L, 1.5L))
 	{
+		// The evaluation's errors are amplified by the derivative, 1 + tan^2
 		const auto t = std::tan(ld(x));
-		ASSERT_TRUE(within(ld(tan(x)), t, tolerance * 2 * (1 + t * t))) << "tan(" << ld(x) << ")";
+		if(std::abs(t) >= max_value<P>)
+			continue;
+		ASSERT_TRUE(within(ld(tan(x)), t, 0.625L * eps<P> + 8 * poly_eps<P> * (1 + t * t))) << "tan(" << ld(x) << ")";
 	}
+	EXPECT_EQ(P(0), sin(P(0)));
+	EXPECT_EQ(P(1), cos(P(0)));
+	EXPECT_EQ(P(0), tan(P(0)));
 }
 
 TYPED_TEST(math_types, inverse_trigonometry)
 {
 	using P = TypeParam;
+	const auto tolerance = approximation_error<P>;
 	for(const auto x : raw_values<P>(true))
-		ASSERT_TRUE(within(ld(atan(x)), std::atan(ld(x)), 1e-3L + 2 * eps<P>)) << "atan(" << ld(x) << ")";
+		ASSERT_TRUE(within(ld(atan(x)), std::atan(ld(x)), tolerance)) << "atan(" << ld(x) << ")";
 	for(const auto x : values<P>(-1, 1))
 	{
-		// Plus the rounding errors of the square root, division and multiplication by two
-		ASSERT_TRUE(within(ld(asin(x)), std::asin(ld(x)), 1e-3L + 4 * eps<P>)) << "asin(" << ld(x) << ")";
-		ASSERT_TRUE(within(ld(acos(x)), std::acos(ld(x)), 2e-3L + 4 * eps<P>)) << "acos(" << ld(x) << ")";
+		ASSERT_TRUE(within(ld(asin(x)), std::asin(ld(x)), tolerance)) << "asin(" << ld(x) << ")";
+		ASSERT_TRUE(within(ld(acos(x)), std::acos(ld(x)), tolerance)) << "acos(" << ld(x) << ")";
 	}
-	for(const auto angle : values<P>(-3.1L, 3.1L))
+	const auto xs = raw_values<P>(true);
+	for(std::size_t i = 0; i + 1 < xs.size(); ++i)
 	{
-		const auto y = P(std::sin(static_cast<double>(angle)));
-		const auto x = P(std::cos(static_cast<double>(angle)));
-		if(x == P(0) && y == P(0))
-			continue;
-		ASSERT_TRUE(within(ld(atan2(y, x)), std::atan2(ld(y), ld(x)), 1e-3L + 2 * eps<P>)) << "atan2(" << ld(y) << ", " << ld(x) << ")";
+		const auto y = xs[i];
+		const auto x = xs[i + 1];
+		ASSERT_TRUE(within(ld(atan2(y, x)), std::atan2(ld(y), ld(x)), tolerance)) << "atan2(" << ld(y) << ", " << ld(x) << ")";
 	}
+	EXPECT_EQ(P(0), atan(P(0)));
+	EXPECT_EQ(P(0), asin(P(0)));
 }
 
 TYPED_TEST(math_types, logarithms)
 {
 	using P = TypeParam;
-	// The polynomial's error is below 1.3e-5 (in log2)
+	const auto tolerance = approximation_error<P>;
 	for(const auto x : raw_values<P>(false))
 	{
-		ASSERT_TRUE(within(ld(log2(x)), std::log2(ld(x)), 1.5e-5L + 4 * poly_eps<P, 1> + 2 * eps<P>)) << "log2(" << ld(x) << ")";
-		ASSERT_TRUE(within(ld(log(x)), std::log(ld(x)), 1.1e-5L + 2 * eps<P>)) << "log(" << ld(x) << ")";
-		ASSERT_TRUE(within(ld(log10(x)), std::log10(ld(x)), 0.5e-5L + 2 * eps<P>)) << "log10(" << ld(x) << ")";
+		const auto expected = std::log2(ld(x));
+		if(std::abs(expected) >= max_value<P>)
+			continue;
+		ASSERT_TRUE(within(ld(log2(x)), expected, tolerance)) << "log2(" << ld(x) << ")";
+		ASSERT_TRUE(within(ld(log(x)), std::log(ld(x)), tolerance)) << "log(" << ld(x) << ")";
+		ASSERT_TRUE(within(ld(log10(x)), std::log10(ld(x)), tolerance)) << "log10(" << ld(x) << ")";
 	}
+	// Exact for powers of two
+	EXPECT_EQ(P(0), log2(P(1)));
+	EXPECT_EQ(P(3), log2(P(8)));
+	EXPECT_EQ(P(-2), log2(P(0.25)));
+	EXPECT_EQ(P(0), log(P(1)));
 }
 
 TYPED_TEST(math_types, exponentials)
@@ -241,21 +260,19 @@ TYPED_TEST(math_types, exponentials)
 	const long double max_log2 = std::log2(max_value<P>);
 	const long double lowest = ld(std::numeric_limits<P>::lowest());
 
+	// The results have up to all the bits of the type, but the evaluation has M fraction bits: a relative error of a few 2^-M
+	const auto tolerance = [](const long double expected) { return 0.5L * eps<P> + 8 * poly_eps<P> * expected; };
 	for(const auto x : values<P>(std::max(lowest, -max_log2 - 70), max_log2 - 0.01L))
 	{
-		// The polynomial's relative error is below 1.2e-7, plus the precision of its evaluation
 		const auto expected = std::exp2(ld(x));
-		ASSERT_TRUE(within(ld(exp2(x)), expected, (2e-7L + 4 * poly_eps<P, 1>) * expected + eps<P>)) << "exp2(" << ld(x) << ")";
+		ASSERT_TRUE(within(ld(exp2(x)), expected, tolerance(expected))) << "exp2(" << ld(x) << ")";
 	}
 
 	const long double max_log = std::log(max_value<P>);
 	for(const auto x : values<P>(std::max(lowest, -max_log - 50), max_log - 0.01L))
 	{
-		// The polynomial's relative error is below 1.2e-6, and e^n uses e rounded to the type's precision
 		const auto expected = std::exp(ld(x));
-		const auto n = std::abs(std::floor(ld(x)));
-		const auto tolerance = (2e-6L + 4 * poly_eps<P, 2> + 2 * n * eps<P>) * expected + 2 * eps<P>;
-		ASSERT_TRUE(within(ld(exp(x)), expected, tolerance)) << "exp(" << ld(x) << ")";
+		ASSERT_TRUE(within(ld(exp(x)), expected, tolerance(expected))) << "exp(" << ld(x) << ")";
 	}
 
 	// Saturation instead of overflow
@@ -266,10 +283,11 @@ TYPED_TEST(math_types, exponentials)
 		EXPECT_EQ(P(0), exp(std::numeric_limits<P>::lowest()));
 		EXPECT_EQ(P(0), exp2(std::numeric_limits<P>::lowest()));
 	}
-	// (The approximations are not exact at 0: the polynomials' errors are around 1e-6 (exp) and 1e-7 (exp2))
-	EXPECT_TRUE(within(ld(exp(P(0))), 1, 2e-6L + eps<P>));
-	EXPECT_TRUE(within(ld(exp2(P(0))), 1, 2e-7L + eps<P>));
-	EXPECT_TRUE(within(ld(exp2(P(2))), 4, 8e-7L + eps<P>));
+	// Exact for integers (exp2) and 0
+	EXPECT_EQ(P(1), exp(P(0)));
+	EXPECT_EQ(P(1), exp2(P(0)));
+	EXPECT_EQ(P(4), exp2(P(2)));
+	EXPECT_EQ(P(0.25), exp2(P(-2)));
 }
 
 TYPED_TEST(math_types, pow)
@@ -295,7 +313,8 @@ TYPED_TEST(math_types, pow)
 		}
 	}
 
-	// Fractional exponents: exp2(y * log2(x))
+	// Fractional exponents: exp2(y * log2(x)), with the product calculated exactly from log2(x) with M fraction bits,
+	// so the relative error is a few 2^-M times the exponent
 	for(const long double y : {-2.5L, -0.5L, 0.25L, 0.5L, 1.5L, 2.75L})
 	{
 		for(const auto x : raw_values<P>(false, 500))
@@ -303,8 +322,8 @@ TYPED_TEST(math_types, pow)
 			const auto expected = std::pow(ld(x), y);
 			if(expected >= max_value<P> * 0.99L)
 				continue;
-			const auto relative = 0.6931L * (std::abs(y) * (1.5e-5L + 4 * poly_eps<P, 1> + 2 * e) + e) + 3e-7L + 4 * poly_eps<P, 1>;
-			ASSERT_TRUE(within(ld(pow(x, P(static_cast<double>(y)))), expected, 1.5L * relative * expected + 2 * e)) << "pow(" << ld(x) << ", " << y << ")";
+			const auto tolerance = 0.5L * e + 8 * (1 + std::abs(y)) * poly_eps<P> * expected;
+			ASSERT_TRUE(within(ld(pow(x, P(static_cast<double>(y)))), expected, tolerance)) << "pow(" << ld(x) << ", " << y << ")";
 		}
 	}
 
@@ -313,6 +332,7 @@ TYPED_TEST(math_types, pow)
 	EXPECT_EQ(P(1), pow(P(0), P(0)));
 	EXPECT_EQ(P(0), pow(P(0), 3));
 	EXPECT_EQ(P(1), pow(P(5), 0));
+	EXPECT_EQ(P(2), pow(P(4), P(0.5)));
 }
 
 TEST(math_types, constexpr_evaluation)
