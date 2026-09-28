@@ -12,48 +12,11 @@
 #include <type_traits>
 #include <version>
 
+#include "../detail/charconv.hpp"
 #include "charconv.hpp"
 #include "fixed.hpp"
 
-// `std::format` support for fixed-point numbers. Independent of streams and locales: see <fpm/ios.hpp> for those.
-
-namespace fpm
-{
-	namespace detail
-	{
-		/// Applies the alternate form ('#' in printf and std::format, std::showpoint for streams) to the output of
-		/// `to_chars` for the given `type` ('a', 'e', 'f', 'g', or '\0' for the general format with a precision):
-		/// the decimal point is always shown, and for 'g' trailing zeros are kept to show `precision` significant digits.
-		inline void apply_alternate_form(std::string& text, const char type, const int32_t precision)
-		{
-			const auto exponent_pos = text.find_first_of(type == 'a' ? "p" : "e");
-			const auto mantissa_end = (exponent_pos == std::string::npos) ? text.size() : exponent_pos;
-			if(text.find('.') == std::string::npos)
-				text.insert(mantissa_end, 1, '.');
-
-			if(type == 'g' || type == '\0')
-			{
-				const auto significant_wanted = static_cast<std::size_t>(precision == 0 ? 1 : (precision < 0 ? 6 : precision));
-				const auto end_pos = text.find_first_of("e");
-				const auto end = (end_pos == std::string::npos) ? text.size() : end_pos;
-				std::size_t significant = 0;
-				bool leading = true;
-				for(std::size_t i = 0; i < end; ++i)
-				{
-					const char c = text[i];
-					if(c < '0' || c > '9' || (leading && c == '0'))
-						continue;
-					leading = false;
-					++significant;
-				}
-				if(leading)
-					significant = 1; // zero: "0" counts as one significant digit
-				if(significant < significant_wanted)
-					text.insert(end, significant_wanted - significant, '0');
-			}
-		}
-	}
-}
+// `std::format` support for fixed-point numbers. Independent of streams and locales: see <fpm/fixed/ios.hpp> for those.
 
 namespace std
 {

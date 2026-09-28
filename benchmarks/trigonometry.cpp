@@ -1,6 +1,6 @@
 #include <benchmark/benchmark.h>
-#include <fpm/fixed.hpp>
-#include <fpm/math.hpp>
+#include <fpm/fixed/fixed.hpp>
+#include <fpm/fixed/math.hpp>
 #include <fixmath.h>
 
 #define BENCHMARK_TEMPLATE1_CAPTURE(func, test_case_name, a, ...) \

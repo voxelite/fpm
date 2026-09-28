@@ -1,5 +1,5 @@
 #include "common.hpp"
-#include <fpm/math.hpp>
+#include <fpm/fixed/math.hpp>
 
 TEST(detail, find_highest_bit)
 {

@@ -3,7 +3,7 @@
 #include <numbers>
 
 #include "common.hpp"
-#include <fpm/format.hpp>
+#include <fpm/fixed/format.hpp>
 
 template<typename B, typename I, uint32_t F, bool R>
 inline void ExpectFormat(

@@ -1,5 +1,5 @@
 #include "common.hpp"
-#include <fpm/fraction.hpp>
+#include <fpm/fraction/fraction.hpp>
 
 #include <cmath>
 #include <random>
@@ -94,20 +94,20 @@ namespace
 			&& P{fpm::fixed_16_16{-3}} == zero
 			&& P{fpm::fixed_8_8{0.25}} == quarter
 			&& P{(fpm::fixed<uint16_t, uint32_t, 8>{255.5})} == half
-			&& fpm::fixed_16_16{half} == fpm::fixed_16_16{0.5}
-			&& fpm::fixed_8_8{quarter} == fpm::fixed_8_8{0.25}
-			&& fpm::fixed_4_4{half} == fpm::fixed_4_4{0.5}
-			&& (fpm::fixed<uint16_t, uint32_t, 8>{half}) == (fpm::fixed<uint16_t, uint32_t, 8>{0.5})
-			&& (fpm::fixed<int32_t, int64_t, 30>{quarter}) == (fpm::fixed<int32_t, int64_t, 30>{0.25})
-			&& (fpm::fixed<int32_t, int64_t, 1>{last}) == (fpm::fixed<int32_t, int64_t, 1>{1})
-			&& (fpm::fixed<int32_t, int64_t, 1, false>{last}) == (fpm::fixed<int32_t, int64_t, 1, false>{0.5})
+			&& fpm::fixed_16_16(half) == fpm::fixed_16_16{0.5}
+			&& fpm::fixed_8_8(quarter) == fpm::fixed_8_8{0.25}
+			&& fpm::fixed_4_4(half) == fpm::fixed_4_4{0.5}
+			&& (fpm::fixed<uint16_t, uint32_t, 8>(half)) == (fpm::fixed<uint16_t, uint32_t, 8>{0.5})
+			&& (fpm::fixed<int32_t, int64_t, 30>(quarter)) == (fpm::fixed<int32_t, int64_t, 30>{0.25})
+			&& (fpm::fixed<int32_t, int64_t, 1>(last)) == (fpm::fixed<int32_t, int64_t, 1>{1})
+			&& (fpm::fixed<int32_t, int64_t, 1, false>(last)) == (fpm::fixed<int32_t, int64_t, 1, false>{0.5})
 #ifdef FPM_INT128
 			&& P{fpm::fixed_32_32{-7.75}} == quarter
 			&& P{fpm::fixed_8_56{0.5}} == half
-			&& fpm::fixed_32_32{half} == fpm::fixed_32_32{0.5}
-			&& fpm::fixed_8_56{quarter} == fpm::fixed_8_56{0.25}
-			&& (fpm::fixed<int64_t, FPM_INT128, 62>{last}) <= (fpm::fixed<int64_t, FPM_INT128, 62>{1})
-			&& (fpm::fixed<int64_t, FPM_INT128, 62, false>{last}) < (fpm::fixed<int64_t, FPM_INT128, 62, false>{1})
+			&& fpm::fixed_32_32(half) == fpm::fixed_32_32{0.5}
+			&& fpm::fixed_8_56(quarter) == fpm::fixed_8_56{0.25}
+			&& (fpm::fixed<int64_t, FPM_INT128, 62>(last)) <= (fpm::fixed<int64_t, FPM_INT128, 62>{1})
+			&& (fpm::fixed<int64_t, FPM_INT128, 62, false>(last)) < (fpm::fixed<int64_t, FPM_INT128, 62, false>{1})
 #endif
 			;
 	}
@@ -274,7 +274,7 @@ namespace
 
 		for(const P x : values<P>())
 		{
-			const Q q{x};
+			const Q q(x);
 			const auto value = std::ldexp(static_cast<long double>(q.raw_value()), -fixed_bits);
 			if(fixed_bits >= fraction_bits)
 			{
@@ -359,9 +359,9 @@ TEST(fraction, exhaustive)
 	for(uint32_t raw = 0; raw <= 0xFFFF; ++raw)
 	{
 		const auto x = fpm::fraction<uint16_t>::from_raw_value(static_cast<uint16_t>(raw));
-		ASSERT_EQ(x, fpm::fraction<uint16_t>{fpm::fixed_16_16{x}});
+		ASSERT_EQ(x, fpm::fraction<uint16_t>{fpm::fixed_16_16(x)});
 		ASSERT_EQ(x, fpm::fraction<uint16_t>{static_cast<float>(x)});
-		ASSERT_EQ(static_cast<int32_t>(raw), fpm::fixed_16_16{x}.raw_value());
+		ASSERT_EQ(static_cast<int32_t>(raw), fpm::fixed_16_16(x).raw_value());
 		ASSERT_EQ(static_cast<uint16_t>(raw * raw), (x * raw).raw_value());
 		ASSERT_EQ(static_cast<uint16_t>(0u - raw), (-x).raw_value());
 
@@ -390,6 +390,6 @@ TEST(fraction, angle)
 	angle += Angle{0.5}; // a turn and a quarter
 	EXPECT_EQ(Angle{0.25}, angle);
 
-	const auto radians = fpm::fixed_16_16{angle} * fpm::fixed_16_16::two_pi();
+	const auto radians = fpm::fixed_16_16(angle) * fpm::fixed_16_16::two_pi();
 	EXPECT_EQ(fpm::fixed_16_16::half_pi(), radians);
 }

@@ -18,11 +18,12 @@
 #include <string_view>
 #include <system_error>
 
+#include "../detail/charconv.hpp"
 #include "charconv.hpp"
-#include "fixed.hpp"
 #include "format.hpp"
+#include "fraction.hpp"
 
-// Stream operators for fixed-point numbers. This header also provides the `std::format` support of <fpm/format.hpp>,
+// Stream operators for fractions. This header also provides the `std::format` support of <fpm/fraction/format.hpp>,
 // which can be included on its own to avoid the dependency on streams and locales.
 
 namespace fpm
@@ -30,8 +31,8 @@ namespace fpm
 	/// Prints like a floating-point number: supports the float field (fixed, scientific, hexfloat and default),
 	/// precision, showpoint, showpos, uppercase, width, fill, adjustfield and the locale's decimal point and grouping.
 	/// The digits are exactly rounded (ties to even).
-	template<typename CharT, typename Traits, typename B, typename I, uint32_t F, bool R>
-	std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, fixed<B, I, F, R> x)
+	template<typename CharT, typename Traits, typename B>
+	std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, fraction<B> x)
 	{
 		// A formatted output function: does nothing if the stream is not ready
 		const typename std::basic_ostream<CharT, Traits>::sentry sentry(os);
@@ -230,8 +231,10 @@ namespace fpm
 		return os;
 	}
 
-	template<typename CharT, class Traits, typename B, typename I, uint32_t F, bool R>
-	std::basic_istream<CharT, Traits>& operator>>(std::basic_istream<CharT, Traits>& is, fixed<B, I, F, R>& x)
+	/// Reads like a floating-point number. A number that is not in [0, 1) stores the nearest value (0 or the largest
+	/// fraction) and fails, like a number that is out of range for the built-in types.
+	template<typename CharT, class Traits, typename B>
+	std::basic_istream<CharT, Traits>& operator>>(std::basic_istream<CharT, Traits>& is, fraction<B>& x)
 	{
 		typename std::basic_istream<CharT, Traits>::sentry sentry(is);
 		if(!sentry)
@@ -323,13 +326,13 @@ namespace fpm
 		{
 			// Infinity cannot be represented: like a value that is out of range
 			if(i == 3 || i == 8)
-				x = negate ? std::numeric_limits<fixed<B, I, F, R>>::lowest() : std::numeric_limits<fixed<B, I, F, R>>::max();
+				x = fraction<B>::from_raw_value(negate ? B{0} : std::numeric_limits<B>::max());
 			is.setstate(std::ios::failbit);
 			return is;
 		}
 
 		// Collect the digits and let the exact conversion of `fpm::from_chars` convert them (no allocations)
-		detail::charconv::decimal_for<B, F> digits;
+		detail::fraction_charconv::decimal_for<B> digits;
 		digits.negative = negate;
 
 		char exponent_char = 'e';
@@ -417,17 +420,17 @@ namespace fpm
 		// We've parsed all we need. Construct the value.
 		digits.trim();
 		const auto converted = hex
-			? detail::charconv::from_hex_digits<B, F, R>(digits)
-			: detail::charconv::from_decimal<B, I, F, R>(digits);
+			? detail::fraction_charconv::from_hex_digits<B>(digits)
+			: detail::fraction_charconv::from_decimal<B>(digits);
 		if(converted.out_of_range)
 		{
 			// Out of range: like for the built-in types, the nearest value is stored and the extraction fails
-			x = negate ? std::numeric_limits<fixed<B, I, F, R>>::lowest() : std::numeric_limits<fixed<B, I, F, R>>::max();
+			x = fraction<B>::from_raw_value(negate ? B{0} : std::numeric_limits<B>::max());
 			is.setstate(std::ios::failbit);
 		}
 		else
 		{
-			x = fixed<B, I, F, R>::from_raw_value(detail::charconv::to_raw<B>(converted.magnitude, negate));
+			x = fraction<B>::from_raw_value(converted.value);
 		}
 		return is;
 	}

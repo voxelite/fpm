@@ -9,19 +9,7 @@ target_compile_features(fpm INTERFACE cxx_std_26)
 
 target_include_directories(fpm INTERFACE include)
 
-install(FILES
-  include/fpm/charconv.hpp
-  include/fpm/fixed.hpp
-  include/fpm/format.hpp
-  include/fpm/fraction.hpp
-  include/fpm/ios.hpp
-  include/fpm/math.hpp
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fpm
-)
-install(FILES
-  include/fpm/detail/polynomials.hpp
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fpm/detail
-)
+install(DIRECTORY include/fpm DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 # Tests, benchmarks and the accuracy tool are only built by default if this is the top-level project
 option(FPM_BUILD_ACCURACY  "Build the fpm accuracy tool" ${PROJECT_IS_TOP_LEVEL})
@@ -50,6 +38,8 @@ if(FPM_BUILD_TESTS)
     tests/formatting.cpp
     tests/formatting_wchar.cpp
     tests/fraction.cpp
+    tests/fraction_charconv.cpp
+    tests/fraction_format.cpp
     tests/from.cpp
     tests/input.cpp
     tests/int128.cpp

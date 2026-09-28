@@ -7,7 +7,7 @@
 #include <limits>
 #include <type_traits>
 
-#include "fixed.hpp"
+#include "../fixed/fixed.hpp"
 
 namespace fpm
 {

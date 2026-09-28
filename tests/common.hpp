@@ -1,6 +1,6 @@
 #pragma once
 
-#include <fpm/fixed.hpp>
+#include <fpm/fixed/fixed.hpp>
 #include <gtest/gtest.h>
 #include <iomanip>
 #include <ostream>

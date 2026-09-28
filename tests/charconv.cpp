@@ -1,6 +1,6 @@
 #include "common.hpp"
-#include <fpm/charconv.hpp>
-#include <fpm/ios.hpp>
+#include <fpm/fixed/charconv.hpp>
+#include <fpm/fixed/ios.hpp>
 
 #include <array>
 #include <charconv>
@@ -625,3 +625,41 @@ TEST(charconv, long_inputs_are_exact)
 	check_long_inputs<fpm::fixed<int32_t, int64_t, 28>>();
 }
 #endif
+
+// Unsigned types with many fraction bits: the bound of the digits that follow exceeds the power of ten
+// of the first digits, and their difference is not negative in an unsigned type
+TEST(charconv, unsigned_many_fraction_bits)
+{
+	using P = fpm::fixed<uint32_t, uint64_t, 31>;
+	for(const std::string_view text : {"4e-10", "0.0000000004", "0.00000000040000000000000000000000000001"})
+	{
+		P value{};
+		const auto result = fpm::from_chars(text.data(), text.data() + text.size(), value);
+		EXPECT_EQ(std::errc{}, result.ec) << text;
+		EXPECT_EQ(1u, value.raw_value()) << text; // 0.86 units
+	}
+	for(const std::string_view text : {"2e-10", "0.0000000002", "0.00000000023283064365386962890624"})
+	{
+		P value{1};
+		const auto result = fpm::from_chars(text.data(), text.data() + text.size(), value);
+		EXPECT_EQ(std::errc{}, result.ec) << text;
+		EXPECT_EQ(0u, value.raw_value()) << text; // below half a unit
+	}
+
+#ifdef FPM_INT128
+	// Against the signed type with the same fraction bits
+	std::mt19937_64 rng(31);
+	for(int i = 0; i < 20000; ++i)
+	{
+		std::string digits = "0.";
+		const auto length = 1 + rng() % 40;
+		for(uint64_t j = 0; j < length; ++j)
+			digits.push_back(static_cast<char>('0' + rng() % 10));
+		P value{};
+		fpm::fixed<int64_t, FPM_INT128, 31> expected{};
+		ASSERT_EQ(std::errc{}, fpm::from_chars(digits.data(), digits.data() + digits.size(), value).ec);
+		ASSERT_EQ(std::errc{}, fpm::from_chars(digits.data(), digits.data() + digits.size(), expected).ec);
+		ASSERT_EQ(static_cast<int64_t>(value.raw_value()), expected.raw_value()) << digits;
+	}
+#endif
+}
