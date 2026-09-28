@@ -4,12 +4,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
-#include <cstdlib>
 #include <utility>
-
-#ifdef _MSC_VER
-#include <intrin.h>
-#endif
 
 #include "fixed.hpp"
 #include "detail/polynomials.hpp"
@@ -204,7 +199,7 @@ namespace fpm
 		{
 			static_assert(P >= 0 && P <= 62 && XBits + P + 1 <= value_bits<T>);
 			// c = high / 2^P + low / 2^(P + E): x * low needs XBits + E bits
-			constexpr int32_t E = std::min({63, value_bits<T> - XBits, 124 - P});
+			constexpr int32_t E = std::min<int32_t>({63, value_bits<T> - XBits, 124 - P});
 			constexpr auto high = static_cast<T>(C.bits(P, 63));
 			constexpr auto low = static_cast<T>(C.bits(P + E, E));
 			return static_cast<T>(x * high + ((x * low) >> E));
@@ -270,19 +265,7 @@ namespace fpm
 		/// adds at most 1/8 unit to the rounding error. But at most one bit more than the evaluation's M bits, which limit
 		/// the precision anyway.
 		template<uint32_t F, int32_t M>
-		inline constexpr int32_t target_bits = std::min(static_cast<int32_t>(F) + 3, M + 1);
-
-		/// Splits x into floor(x) and the fraction x - floor(x) in [0, 1)
-		template<typename B, typename I, uint32_t F, bool R>
-		[[nodiscard]] inline constexpr std::pair<B, fixed<B, I, F, R>> split_floor(const fixed<B, I, F, R> x) noexcept
-		{
-			using U = std::make_unsigned_t<B>;
-			const B raw = x.raw_value();
-			return {
-				static_cast<B>(raw >> F), // arithmetic shift: rounds towards negative infinity
-				fixed<B, I, F, R>::from_raw_value(static_cast<B>(static_cast<U>(raw) & ((U{1} << F) - 1)))
-			};
-		}
+		inline constexpr int32_t target_bits = std::min<int32_t>(static_cast<int32_t>(F) + 3, M + 1);
 
 	}
 	#pragma endregion
@@ -473,7 +456,7 @@ namespace fpm
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> remainder(fixed<B, I, F, R> x, fixed<B, I, F, R> y) noexcept
 	{
 		const auto division = detail::divide_to_nearest<I>(x.raw_value(), y.raw_value());
-		return fixed<B, I, F, R>::from_raw_value(division.remainder);
+		return fixed<B, I, F, R>::from_raw_value(static_cast<B>(division.remainder));
 	}
 
 	/// Same result as `remainder`. Also stores the sign and the low 30 bits of the rounded quotient x / y in `*quo`.
@@ -485,7 +468,7 @@ namespace fpm
 		const I quotient = division.quotient;
 		const auto low_bits = static_cast<int>((quotient < 0 ? -quotient : quotient) & I{0x3FFF'FFFF});
 		*quo = quotient < 0 ? -low_bits : low_bits;
-		return fixed<B, I, F, R>::from_raw_value(division.remainder);
+		return fixed<B, I, F, R>::from_raw_value(static_cast<B>(division.remainder));
 	}
 
 	#pragma endregion
@@ -668,9 +651,9 @@ namespace fpm
 
 			// e * c + p * c, both products with as many fraction bits as the signed intermediate type allows.
 			// |e| <= 64, and |p| <= 2^(M-1) (as a raw value).
-			constexpr int32_t E = std::min(63, value_bits<SI> - 7);
-			constexpr int32_t P = std::min(63, value_bits<SI> - M + 1);
-			constexpr int32_t Q = std::min(E, M + P); // the fraction bits of the sum
+			constexpr int32_t E = std::min<int32_t>(63, value_bits<SI> - 7);
+			constexpr int32_t P = std::min<int32_t>(63, value_bits<SI> - M + 1);
+			constexpr int32_t Q = std::min<int32_t>(E, M + P); // the fraction bits of the sum
 			const SI high = static_cast<SI>(e) * round_constant<SI>(ConstantQ63, 63, E);
 			const SI low = static_cast<SI>(p) * round_constant<SI>(ConstantQ63, 63, P);
 			const SI sum = shift_by<Q - E>(high) + shift_by<Q - M - P>(low);
@@ -693,11 +676,11 @@ namespace fpm
 			return Fixed(0);
 		}
 
-		constexpr auto FRAC = I{1} << F;
-		if(exp.raw_value() % FRAC == 0)
+		const detail::floor_parts<B, F> parts(exp.raw_value());
+		if(parts.fraction == 0)
 		{
 			// Non-fractional exponents are easier to calculate
-			return pow(base, static_cast<B>(exp.raw_value() / FRAC));
+			return pow(base, parts.floor);
 		}
 
 		// For negative bases we do not support fractional exponents.
@@ -724,7 +707,7 @@ namespace fpm
 			return Fixed(0);
 
 		// The exponent in Q(F+K), with as many fraction bits as fit: up to 3 * limit
-		constexpr int32_t K = std::min(M, detail::value_bits<SI> - static_cast<int32_t>(F) - static_cast<int32_t>(std::bit_width(3u * (digits + 2))));
+		constexpr int32_t K = std::min<int32_t>(M, detail::value_bits<SI> - static_cast<int32_t>(F) - static_cast<int32_t>(std::bit_width(static_cast<uint32_t>(3 * (digits + 2)))));
 		const SI low_k = detail::shift_by<K - M>(low);
 		if(low_k > (limit << K)) [[unlikely]]
 			return std::numeric_limits<Fixed>::max(); // only when e == 0
@@ -752,9 +735,9 @@ namespace fpm
 		}
 
 		// Now |raw| < 2^(F + range): the product with log2(e) can have P fraction bits
-		constexpr int32_t range = static_cast<int32_t>(std::bit_width(static_cast<uint32_t>(std::max(digits - static_cast<int32_t>(F), static_cast<int32_t>(F) + 2))));
+		constexpr int32_t range = static_cast<int32_t>(std::bit_width(static_cast<uint32_t>(std::max<int32_t>(digits - static_cast<int32_t>(F), static_cast<int32_t>(F) + 2))));
 		constexpr int32_t XBits = static_cast<int32_t>(F) + range;
-		constexpr int32_t P = std::min(62, detail::value_bits<SI> - XBits - 1);
+		constexpr int32_t P = std::min<int32_t>(62, detail::value_bits<SI> - XBits - 1);
 		return detail::exp2_fixed_point<B, I, F, R, static_cast<int32_t>(F) + P>(detail::multiply_by_long_constant<SI, detail::log2_e, XBits, P>(raw));
 	}
 
@@ -897,34 +880,8 @@ namespace fpm
 		if(x == Fixed(0))
 			return x;
 
-		// Finding the square root of an integer in base-2, from:
-		// https://en.wikipedia.org/wiki/Methods_of_computing_square_roots#Binary_numeral_system_.28base_2.29
-
-		// Shift by F first because it's fixed-point.
-		I num = I{x.raw_value()} << F;
-		I res = 0;
-
-		// "bit" starts at the greatest power of four that's less than the argument.
-		for(
-			I bit = I{1} << ((detail::find_highest_bit(x.raw_value()) + F) / 2 * 2);
-			bit != 0;
-			bit >>= 2
-		)
-		{
-			const I val = res + bit;
-			res >>= 1;
-			if(num >= val)
-			{
-				num -= val;
-				res += bit;
-			}
-		}
-
-		// Round the last digit up if necessary
-		if(num > res)
-			res++;
-
-		return Fixed::from_raw_value(static_cast<B>(res));
+		// The raw value of the result is sqrt(X * 2^F) for the raw value X
+		return Fixed::from_raw_value(static_cast<B>(detail::sqrt_rounded(static_cast<I>(static_cast<I>(x.raw_value()) << F))));
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -972,7 +929,7 @@ namespace fpm
 
 		/// The fraction bits of the product of a raw value with 2/π
 		template<typename B, typename I, uint32_t F>
-		inline constexpr int32_t quarter_turn_bits = static_cast<int32_t>(F) + std::min(62, value_bits<signed_intermediate<I>> - std::numeric_limits<std::make_unsigned_t<B>>::digits - 1);
+		inline constexpr int32_t quarter_turn_bits = static_cast<int32_t>(F) + std::min<int32_t>(62, value_bits<signed_intermediate<I>> - std::numeric_limits<std::make_unsigned_t<B>>::digits - 1);
 
 		template<typename B, typename I, uint32_t F, bool R>
 		[[nodiscard]] inline constexpr quarter_turns_result<I> quarter_turns(const fixed<B, I, F, R> x) noexcept
@@ -1056,8 +1013,8 @@ namespace fpm
 
 		// Where the tangent is large, the cosine is small: calculated with k more fraction bits, as far as the division allows
 		// (sine << (F + k) must fit) and as the reduced angle has them. sin(v) = v Q(v^2) for the denominator's angle v.
-		constexpr int32_t k_max = std::min(detail::value_bits<SI> - 1 - M - static_cast<int32_t>(F), Z - M);
-		const int32_t k = std::clamp(Z - 1 - detail::find_highest_bit(denominator), 0, k_max);
+		constexpr int32_t k_max = std::min<int32_t>(detail::value_bits<SI> - 1 - M - static_cast<int32_t>(F), Z - M);
+		const int32_t k = std::clamp<int32_t>(Z - 1 - detail::find_highest_bit(denominator), 0, k_max);
 		const auto v = static_cast<S>(denominator >> (Z - M - k)); // Q(M+k), below 2^M
 		const auto v_m = static_cast<S>(v >> k);
 		const S cosine = detail::poly_multiply<I, M, S>(v, detail::sin_quotient<B, I, M + 1>(detail::poly_multiply<I, M, S>(v_m, v_m)));
@@ -1098,16 +1055,6 @@ namespace fpm
 			return swap ? static_cast<I>(round_constant<I>(half_pi_q62, 62, M) - angle) : angle;
 		}
 
-		/// raw < 0 (without warnings for unsigned types)
-		template<typename B>
-		[[nodiscard]] inline constexpr bool is_negative(const B raw) noexcept
-		{
-			if constexpr(std::is_signed_v<B>)
-				return raw < 0;
-			else
-				return false;
-		}
-
 		/// |x| of a raw value, in the intermediate type (where it cannot overflow)
 		template<typename B, typename I>
 		[[nodiscard]] inline constexpr I magnitude(const B raw) noexcept
@@ -1134,7 +1081,7 @@ namespace fpm
 			// asin(x) = atan(x / sqrt(1 - x^2)). The raw value of 1 - x^2 in Q(2F) is exactly 2^(2F) - X^2 for the raw value X.
 			// Its square root is rounded to K = F + 8 fraction bits: its error passes on to the angle about one to one,
 			// so this adds at most 1/512 unit to the result. Fewer bits than M make the root faster: it takes K + 1 steps.
-			constexpr int32_t K = std::min(static_cast<int32_t>(F) + 8, M);
+			constexpr int32_t K = std::min<int32_t>(static_cast<int32_t>(F) + 8, M);
 			using SI = signed_intermediate<I>;
 			const I a = magnitude<B, I>(x.raw_value());
 			const auto root = static_cast<I>(sqrt_steps<K + 1>(shift_by<2 * (K - static_cast<int32_t>(F))>(static_cast<SI>((SI{1} << (2 * F)) - static_cast<SI>(a * a)))));
@@ -1191,7 +1138,9 @@ namespace fpm
 		using Fixed = fixed<B, I, F, R>;
 		if(x == Fixed(0))
 		{
-			assert(y != Fixed(0));
+			// Like std::atan2, the angle of the zero vector is 0
+			if(y == Fixed(0))
+				return Fixed(0);
 			return (y > Fixed(0)) ? Fixed::half_pi() : -Fixed::half_pi();
 		}
 

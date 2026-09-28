@@ -1,114 +1,151 @@
 #pragma once
 
 #include <cassert>
-#include <cmath>
+#include <compare>
+#include <concepts>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <type_traits>
 
-#if defined(_WIN32) && defined(_MSC_VER)
-	#if __has_include("__MSVC_Int128.hpp")
-		#include "__MSVC_Int128.hpp"
+// 128-bit integers: the intermediate type for 64-bit base types.
+// Define FPM_INT128 to provide your own type, or FPM_NO_INT128 to not use 128-bit integers.
+// Without a 128-bit integer type (e.g. on most 32-bit targets) the 64-bit base types are not available.
+// The type may be a class: it is only assumed to behave like a signed integer, with a specialization
+// of `std::numeric_limits` (type traits like `std::is_signed` do not recognize classes).
+#if !defined(FPM_INT128) && !defined(FPM_NO_INT128)
+	#if defined(_MSC_VER) && __has_include(<__msvc_int128.hpp>)
+		// MSVC and clang-cl. The latter has `__int128` as well, but the MSVC runtime lacks the functions for its division.
+		#include <__msvc_int128.hpp>
+		#define FPM_INT128 ::std::_Signed128
+	#elif defined(__SIZEOF_INT128__)
+		#define FPM_INT128 __int128
 	#endif
 #endif
 
 namespace fpm
 {
-	// 128-bit integers: the intermediate type for 64-bit base types.
-	// Defined first, as they are also used for some calculations with smaller types.
-	// Define FPM_INT128 to provide your own type, or FPM_NO_INT128 to not use 128-bit integers.
-#if defined(FPM_INT128)
-	// Already defined
-#elif defined(FPM_NO_INT128)
-	// Explicitly disabled: no 64-bit base types
-#elif defined(__SIZEOF_INT128__)
-	using int128_t = __int128_t;
-	#define FPM_INT128 ::fpm::int128_t
-#elif defined(_WIN32) && defined(_MSC_VER)
-	using int128_t = std::_Signed128;
-	#define FPM_INT128 ::fpm::int128_t
-#else
-	#warning 128-bit numbers not supported.
-#endif
-
 #ifdef FPM_INT128
-	static_assert(sizeof(FPM_INT128) > sizeof(int64_t));
-	static_assert(std::numeric_limits<FPM_INT128>::is_signed);
+	using int128_t = FPM_INT128;
+	static_assert(sizeof(int128_t) > sizeof(int64_t));
+	static_assert(std::numeric_limits<int128_t>::is_signed);
 #endif
 
 	namespace detail
 	{
-		template<std::signed_integral BaseType, std::signed_integral IntermediateType, uint32_t FractionalBits>
-		[[nodiscard]] inline constexpr BaseType multiply_rounded(BaseType lhs, BaseType rhs) noexcept
+		/// value < 0 (without warnings for unsigned types)
+		template<typename T>
+		[[nodiscard]] inline constexpr bool is_negative(const T value) noexcept
 		{
-			static_assert(
-				FractionalBits >= 1 && FractionalBits <= (sizeof(BaseType) * 8 - 1),
-				"FractionalBits out of range"
-			);
-
-			IntermediateType p = static_cast<IntermediateType>(lhs) * rhs;
-
-			// Branchless bias: 2^(F-1) for p >= 0, 2^(F-1)-1 for p < 0
-			// This rounds to nearest, ties away from zero.
-			constexpr IntermediateType half = IntermediateType(1) << (FractionalBits - 1);
-			const IntermediateType bias = (p >= 0) ? half : (half - 1);
-
-			// Fast arithmetic right shift by FractionalBits (NO division / modulo)
-			return static_cast<BaseType>((p + bias) >> FractionalBits);
+			if constexpr(std::numeric_limits<T>::is_signed)
+				return value < 0;
+			else
+				return false;
 		}
-		/*
-		template<std::signed_integral BaseType, std::signed_integral IntermediateType, uint32_t FractionalBits>
-		[[nodiscard]] inline constexpr BaseType divide_rounded(BaseType lhs, BaseType rhs) noexcept
+
+		/// value / 2^bits for bits >= 1: rounded to nearest (ties away from zero), or truncated towards zero.
+		/// An arithmetic shift of the biased value instead of a division: the same result, but fast for 128-bit
+		/// class types as well. The biased value must fit: |value| + 2^bits may not overflow.
+		template<bool Round, typename T>
+		[[nodiscard]] inline constexpr T shift_right(const T value, const uint32_t bits) noexcept
 		{
-			static_assert(
-				FractionalBits >= 1 && FractionalBits <= (sizeof(BaseType) * 8 - 1),
-				"FractionalBits out of range"
-			);
-
-			// Upscale numerator: fixed-point division is (lhs * 2^F) / rhs
-			// IntermediateType is wide enough to hold lhs * FRACTION_MULT without overflow.
-			constexpr IntermediateType FMULT = IntermediateType(1) << FractionalBits;
-			const IntermediateType num = static_cast<IntermediateType>(lhs) * FMULT;
-
-			// Single division + remainder — compilers emit one IDIV / SDIV instruction.
-			const IntermediateType q = num / rhs;
-			const IntermediateType r = num % rhs;
-
-			// Round half away from zero.
-			// The remainder |r|*2 >= |rhs| means we are at or past the halfway point.
-			// The direction to round is the sign of the quotient (sign(num) ^ sign(rhs)).
-			// Branchless: bias is +1 when quotient is non-negative, -1 otherwise.
-			// sign(q): (num ^ rhs) < 0  =>  negative quotient
-			const bool negative_quot = (num ^ static_cast<IntermediateType>(rhs)) < 0;
-			const IntermediateType abs_r = r < 0 ? -r : r;
-			const IntermediateType abs_rhs =
-				static_cast<IntermediateType>(rhs) < 0 ?
-				-static_cast<IntermediateType>(rhs) :
-				static_cast<IntermediateType>(rhs);
-
-			// Rounding: if 2*|r| >= |rhs|, adjust by ±1
-			const IntermediateType round =
-				(abs_r * 2 >= abs_rhs) ?
-				(negative_quot ? IntermediateType(-1) : IntermediateType(1)) :
-				IntermediateType(0);
-
-			return static_cast<BaseType>(q + round);
+			// The shift rounds towards negative infinity. Truncating a negative value towards zero takes a bias of
+			// 2^bits - 1; rounding to nearest takes half a unit for positive values, which leaves half a unit minus one.
+			const T half = static_cast<T>(T(1) << (bits - 1));
+			T bias = Round ? half : T(0);
+			if(is_negative(value))
+				bias = static_cast<T>((half - 1) + (Round ? T(0) : half));
+			return static_cast<T>((value + bias) >> bits);
 		}
-		*/
+
+		/// Like `shift_right`, but for any value: nothing can overflow, at the cost of a few more instructions
+		template<bool Round, typename T>
+		[[nodiscard]] inline constexpr T shift_right_any(const T value, const uint32_t bits) noexcept
+		{
+			// value = floor * 2^bits + rest, with 0 <= rest < 2^bits
+			const T floor = static_cast<T>(value >> bits);
+			const T rest = static_cast<T>(value & static_cast<T>((T(1) << bits) - 1));
+			bool up = false;
+			if constexpr(Round)
+			{
+				const T half = static_cast<T>(T(1) << (bits - 1));
+				up = rest > half || (rest == half && !is_negative(value));
+			}
+			else
+			{
+				up = is_negative(value) && rest != 0;
+			}
+			return static_cast<T>(floor + (up ? 1 : 0));
+		}
+
+		/// raw / y truncated towards zero, for any combination of signedness: the usual arithmetic conversions
+		/// would convert a negative value to a (large) unsigned value. Results that do not fit wrap.
+		template<std::integral B, std::integral T>
+		[[nodiscard]] inline constexpr B divide_by_integer(const B raw, const T y) noexcept
+		{
+			if constexpr(std::is_signed_v<B> == std::is_signed_v<T>)
+			{
+				return static_cast<B>(raw / y);
+			}
+			else
+			{
+				// The quotient of the magnitudes, in an unsigned type that holds both
+				using U = std::make_unsigned_t<std::common_type_t<B, T>>;
+				const auto magnitude = [](const auto value)
+				{
+					return is_negative(value) ? static_cast<U>(U{0} - static_cast<U>(value)) : static_cast<U>(value);
+				};
+				const auto quotient = static_cast<U>(magnitude(raw) / magnitude(y));
+				return static_cast<B>(is_negative(raw) != is_negative(y) ? static_cast<U>(U{0} - quotient) : quotient);
+			}
+		}
+
+		/// Whether a raw value with `FractionBits` fraction bits equals an integer. Exact for any combination
+		/// of signedness, and for integers beyond the range of the fixed-point type.
+		template<uint32_t FractionBits, std::integral B, std::integral T>
+		[[nodiscard]] inline constexpr bool equals_integer(const B raw, const T y) noexcept
+		{
+			// No fraction, and the same integer: with the same sign, and the same value in an unsigned type that holds both.
+			// (Without short-circuit evaluation, so there are no branches.)
+			using U = std::make_unsigned_t<std::common_type_t<B, T>>;
+			const auto floor = static_cast<B>(raw >> FractionBits); // arithmetic shift: rounds towards negative infinity
+			return (static_cast<B>(floor << FractionBits) == raw)
+				& (is_negative(floor) == is_negative(y))
+				& (static_cast<U>(floor) == static_cast<U>(y));
+		}
+
+		/// Compares a raw value with `FractionBits` fraction bits with an integer. Exact for any combination
+		/// of signedness, and for integers beyond the range of the fixed-point type.
+		template<uint32_t FractionBits, std::integral B, std::integral T>
+		[[nodiscard]] inline constexpr std::strong_ordering compare_with_integer(const B raw, const T y) noexcept
+		{
+			// x = floor + fraction with 0 <= fraction < 1: the fraction only matters if floor == y
+			const auto floor = static_cast<B>(raw >> FractionBits); // arithmetic shift: rounds towards negative infinity
+			if(is_negative(floor) != is_negative(y))
+				return is_negative(floor) ? std::strong_ordering::less : std::strong_ordering::greater;
+
+			// With the same sign, the conversion to an unsigned type that holds both keeps their order
+			using U = std::make_unsigned_t<std::common_type_t<B, T>>;
+			const auto order = static_cast<U>(floor) <=> static_cast<U>(y);
+			if(order != 0)
+				return order;
+			const bool has_fraction = static_cast<B>(floor << FractionBits) != raw;
+			return has_fraction ? std::strong_ordering::greater : std::strong_ordering::equal;
+		}
 	}
 
 	//! Fixed-point number type
 	//! \tparam BaseType         the base integer type used to store the fixed-point number. This can be a signed or unsigned type.
 	//! \tparam IntermediateType the integer type used to store intermediate results during calculations.
-	//! \tparam FractionBits     the number of bits of the BaseType used to store the fraction
+	//! \tparam FractionBits     the number of bits of the BaseType used to store the fraction. At least one bit
+	//!                          (besides the sign) remains for the integral part, so every type can represent 1.
 	//! \tparam EnableRounding   enable rounding of LSB for multiplication, division, and type conversion
 	template<typename BaseType, typename IntermediateType, uint32_t FractionBits, bool EnableRounding = true>
 	struct fixed
 	{
 		static_assert(std::is_integral_v<BaseType>, "BaseType must be an integral type");
 		static_assert(FractionBits > 0, "FractionBits must be greater than zero");
-		static_assert(FractionBits <= sizeof(BaseType) * 8 - (std::numeric_limits<BaseType>::is_signed ? 1 : 0), "BaseType must at least be able to contain entire fraction, with space for at least one integral bit");
+		static_assert(FractionBits < static_cast<uint32_t>(std::numeric_limits<BaseType>::digits), "BaseType must have at least one integral bit (besides the sign bit) next to the fraction");
 		static_assert(sizeof(IntermediateType) > sizeof(BaseType), "IntermediateType must be larger than BaseType");
 		static_assert(std::numeric_limits<IntermediateType>::is_signed == std::numeric_limits<BaseType>::is_signed, "IntermediateType must have same signedness as BaseType");
 
@@ -119,13 +156,15 @@ namespace fpm
 		static constexpr decltype(FractionBits) integral_bits = (sizeof(BaseType) * 8) - FractionBits;
 		static constexpr decltype(EnableRounding) enable_rounding = EnableRounding;
 
-		/// Although this value fits in the BaseType in terms of bits, if there's only one integral bit, this value
-		/// is incorrect (flips from positive to negative), so we must extend the size to IntermediateType.
+		/// 2^FractionBits in the intermediate type, so calculations with it are done in that type
 		static constexpr IntermediateType FRACTION_MULT = IntermediateType(1) << FractionBits;
 
 #pragma region Constructors
 
 	private:
+		/// 2^FractionBits in the base type: the raw value of 1
+		static constexpr BaseType RAW_ONE = static_cast<BaseType>(BaseType(1) << FractionBits);
+
 		struct raw_construct_tag{};
 		inline constexpr fixed(const BaseType val, raw_construct_tag) noexcept : m_value(val) {}
 
@@ -161,14 +200,14 @@ namespace fpm
 		template<std::floating_point T>
 		[[nodiscard]] inline constexpr explicit operator T() const noexcept
 		{
-			return static_cast<T>(m_value) / FRACTION_MULT;
+			return static_cast<T>(m_value) / static_cast<T>(RAW_ONE);
 		}
 
-		/// Explicit conversion to an integral type
+		/// Explicit conversion to an integral type. Like for floating-point numbers, the fraction is truncated.
 		template<std::integral T>
 		[[nodiscard]] inline constexpr explicit operator T() const noexcept
 		{
-			return static_cast<T>(m_value / FRACTION_MULT);
+			return static_cast<T>(m_value / RAW_ONE);
 		}
 
 #pragma endregion
@@ -190,40 +229,25 @@ namespace fpm
 			requires(NumFractionBits > FractionBits)
 		[[nodiscard]] inline static constexpr fixed from_fixed_point(T value) noexcept
 		{
-			using S = std::conditional_t<(std::is_signed_v<IntermediateType>), std::make_signed_t<T>, T>;
-			using Wider_t = std::conditional_t<(sizeof(S) >= sizeof(IntermediateType)), S, IntermediateType>;
-			const auto wvalue = static_cast<Wider_t>(value);
-
-			// To correctly round the last bit in the result, we need one more bit of information.
-			// We do this by multiplying by two before dividing and adding the LSB to the real result.
-			if constexpr(EnableRounding)
-			{
-				return fixed(
-					static_cast<BaseType>(
-						(wvalue / (Wider_t(1) << (NumFractionBits - FractionBits))) +
-						(wvalue / (Wider_t(1) << (NumFractionBits - FractionBits - 1)) % 2)
-					),
-					raw_construct_tag{}
-				);
-			}
-			else
-			{
-				return fixed(
-					static_cast<BaseType>(wvalue / (Wider_t(1) << (NumFractionBits - FractionBits))),
-					raw_construct_tag{}
-				);
-			}
+			// Rounded (or truncated) in the type of the value: fewer fraction bits need no wider type.
+			// For signed types, a value as wide as the intermediate type is signed as well (a hexadecimal literal
+			// with the sign bit set is unsigned). Narrower unsigned values keep their value.
+			using S = std::conditional_t<(std::is_signed_v<BaseType> && sizeof(T) >= sizeof(IntermediateType)), std::make_signed_t<T>, T>;
+			return fixed(
+				static_cast<BaseType>(detail::shift_right_any<EnableRounding>(static_cast<S>(value), NumFractionBits - FractionBits)),
+				raw_construct_tag{}
+			);
 		}
 
 		template<uint32_t NumFractionBits, typename T>
 			requires(NumFractionBits <= FractionBits)
-		inline static constexpr fixed from_fixed_point(T value) noexcept
+		[[nodiscard]] inline static constexpr fixed from_fixed_point(T value) noexcept
 		{
-			using S = std::conditional_t<(std::is_signed_v<IntermediateType>), std::make_signed_t<T>, T>;
-			using Wider_t = std::conditional_t<(sizeof(S) >= sizeof(IntermediateType)), S, IntermediateType>;
-			// Left shifts are modular in C++20, so this truncates the bits that don't fit (like the other conversions)
+			// In an unsigned type that holds both types: the shift is modular, so this truncates the bits
+			// that don't fit (like the other conversions)
+			using U = std::make_unsigned_t<std::common_type_t<T, BaseType>>;
 			return fixed(
-				static_cast<BaseType>(static_cast<Wider_t>(value) << (FractionBits - NumFractionBits)),
+				static_cast<BaseType>(static_cast<U>(static_cast<U>(value) << (FractionBits - NumFractionBits))),
 				raw_construct_tag{}
 			);
 		}
@@ -260,21 +284,24 @@ namespace fpm
 			// to correctly round the last bit of the result.
 			// Calculated in the intermediate type, or in a 128-bit type if the denominator is too large for it
 			// (a fraction value up to the denominator, times 2^(FractionBits+1), must fit), or else by long division.
-			constexpr bool fits_intermediate = NumFraction <= static_cast<uint64_t>(std::numeric_limits<IntermediateType>::max() >> (FractionBits + 1));
+			constexpr int32_t spare_bits = std::numeric_limits<IntermediateType>::digits - static_cast<int32_t>(FractionBits + 1);
+			constexpr bool fits_intermediate = spare_bits >= 64 || (NumFraction >> spare_bits) == 0;
 			IntermediateType two_frac_part;
-			if constexpr(fits_intermediate || !std::is_signed_v<IntermediateType>)
+			if constexpr(fits_intermediate)
 			{
-				two_frac_part = static_cast<IntermediateType>(fraction_value) * FRACTION_MULT * 2 / static_cast<IntermediateType>(NumFraction);
+				two_frac_part = static_cast<IntermediateType>(
+					(static_cast<IntermediateType>(fraction_value) << (FractionBits + 1)) / static_cast<IntermediateType>(NumFraction)
+				);
 			}
 			else
 			{
 #ifdef FPM_INT128
 				two_frac_part = static_cast<IntermediateType>(
-					static_cast<FPM_INT128>(fraction_value) * (FPM_INT128{1} << (FractionBits + 1)) / static_cast<FPM_INT128>(NumFraction)
+					(static_cast<FPM_INT128>(fraction_value) << (FractionBits + 1)) / static_cast<FPM_INT128>(NumFraction)
 				);
 #else
 				// Binary long division of the magnitude, in unsigned 64-bit arithmetic
-				const bool negative = fraction_value < 0;
+				const bool negative = detail::is_negative(fraction_value);
 				const auto magnitude = negative ? uint64_t{0} - static_cast<uint64_t>(fraction_value) : static_cast<uint64_t>(fraction_value);
 				uint64_t remainder = magnitude % NumFraction;
 				uint64_t quotient = magnitude / NumFraction;
@@ -288,12 +315,8 @@ namespace fpm
 #endif
 			}
 
-			const IntermediateType int_part = static_cast<IntermediateType>(integer_value) * FRACTION_MULT;
-			IntermediateType frac_part;
-			if constexpr(EnableRounding)
-				frac_part = two_frac_part / 2 + two_frac_part % 2; // round half away from zero
-			else
-				frac_part = two_frac_part / 2;                     // truncate towards zero
+			const auto int_part = static_cast<IntermediateType>(static_cast<IntermediateType>(integer_value) << FractionBits);
+			const IntermediateType frac_part = detail::shift_right<EnableRounding>(two_frac_part, 1);
 			return fixed(
 				static_cast<BaseType>(int_part + frac_part),
 				raw_construct_tag{}
@@ -303,10 +326,10 @@ namespace fpm
 
 #pragma region Constants
 
-		[[nodiscard]] inline static constexpr fixed e()       { return from_fixed_point<61>(int64_t{6267931151224907085}); }
-		[[nodiscard]] inline static constexpr fixed pi()      { return from_fixed_point<61>(int64_t{7244019458077122842}); }
-		[[nodiscard]] inline static constexpr fixed half_pi() { return from_fixed_point<62>(int64_t{7244019458077122842}); }
-		[[nodiscard]] inline static constexpr fixed two_pi()  { return from_fixed_point<60>(int64_t{7244019458077122842}); }
+		[[nodiscard]] inline static constexpr fixed e()       noexcept { return from_fixed_point<61>(int64_t{6267931151224907085}); }
+		[[nodiscard]] inline static constexpr fixed pi()      noexcept { return from_fixed_point<61>(int64_t{7244019458077122842}); }
+		[[nodiscard]] inline static constexpr fixed half_pi() noexcept { return from_fixed_point<62>(int64_t{7244019458077122842}); }
+		[[nodiscard]] inline static constexpr fixed two_pi()  noexcept { return from_fixed_point<60>(int64_t{7244019458077122842}); }
 
 #pragma endregion
 
@@ -355,33 +378,16 @@ namespace fpm
 
 		inline constexpr fixed& operator*=(const fixed& y) noexcept
 		{
-			if constexpr(EnableRounding)
-			{
-				if constexpr(std::is_signed_v<BaseType> && FractionBits >= 1 && FractionBits <= sizeof(BaseType) * 8 - 1)
-				{
-					m_value = detail::multiply_rounded<BaseType, IntermediateType, FractionBits>(m_value, y.m_value);
-					return *this;
-				}
-
-				// Normal fixed-point multiplication is: x * y / 2**FractionBits.
-				// To correctly round the last bit in the result, we need one more bit of information.
-				// We do this by multiplying by two before dividing and adding the LSB to the real result.
-				const auto value = (static_cast<IntermediateType>(m_value) * y.m_value) / (FRACTION_MULT / 2);
-				m_value = static_cast<BaseType>((value / 2) + (value % 2));
-				return *this;
-			}
-			else
-			{
-				const auto value = (static_cast<IntermediateType>(m_value) * y.m_value) / FRACTION_MULT;
-				m_value = static_cast<BaseType>(value);
-				return *this;
-			}
+			// x * y / 2^FractionBits, with the product in the intermediate type
+			const auto product = static_cast<IntermediateType>(static_cast<IntermediateType>(m_value) * static_cast<IntermediateType>(y.m_value));
+			m_value = static_cast<BaseType>(detail::shift_right<EnableRounding>(product, FractionBits));
+			return *this;
 		}
 
 		template<std::integral I>
 		inline constexpr fixed& operator*=(I y) noexcept
 		{
-			m_value *= y;
+			m_value = static_cast<BaseType>(m_value * y);
 			return *this;
 		}
 
@@ -392,34 +398,25 @@ namespace fpm
 		inline constexpr fixed& operator/=(const fixed& y) noexcept
 		{
 			assert(y.m_value != 0);
+			// x * 2^FractionBits / y, with the numerator in the intermediate type
 			if constexpr(EnableRounding)
 			{
-				/*if constexpr(std::is_signed_v<BaseType> && FractionBits >= 1 && FractionBits <= sizeof(BaseType) * 8 - 1)
-				{
-					m_value = detail::divide_rounded<BaseType, IntermediateType, FractionBits>(m_value, y.m_value);
-					return *this;
-				}*/
-
-				// Normal fixed-point division is: x * 2**FractionBits / y.
-				// To correctly round the last bit in the result, we need one more bit of information.
-				// We do this by multiplying by two before dividing and adding the LSB to the real result.
-				const auto value = (static_cast<IntermediateType>(m_value) * FRACTION_MULT * 2) / y.m_value;
-				m_value = static_cast<BaseType>((value / 2) + (value % 2));
-				return *this;
+				// One more bit in the quotient, to correctly round the last bit of the result
+				const auto quotient = static_cast<IntermediateType>((static_cast<IntermediateType>(m_value) << (FractionBits + 1)) / y.m_value);
+				m_value = static_cast<BaseType>(detail::shift_right<true>(quotient, 1));
 			}
 			else
 			{
-				const auto value = (static_cast<IntermediateType>(m_value) * FRACTION_MULT) / y.m_value;
-				m_value = static_cast<BaseType>(value);
-				return *this;
+				m_value = static_cast<BaseType>((static_cast<IntermediateType>(m_value) << FractionBits) / y.m_value);
 			}
+			return *this;
 		}
 
 		template<std::integral I>
 		inline constexpr fixed& operator/=(I y) noexcept
 		{
 			assert(y != 0);
-			m_value /= y;
+			m_value = detail::divide_by_integer(m_value, y);
 			return *this;
 		}
 
@@ -440,10 +437,11 @@ namespace fpm
 		template<std::floating_point T>
 		[[nodiscard]] inline static constexpr BaseType floating_to_raw(const T val) noexcept
 		{
+			const T scaled = val * static_cast<T>(RAW_ONE);
 			if constexpr(EnableRounding)
-				return static_cast<BaseType>((val >= T{0}) ? (val * FRACTION_MULT + T{0.5}) : (val * FRACTION_MULT - T{0.5}));
+				return static_cast<BaseType>((val >= T{0}) ? (scaled + T{0.5}) : (scaled - T{0.5}));
 			else
-				return static_cast<BaseType>(val * FRACTION_MULT);
+				return static_cast<BaseType>(scaled);
 		}
 
 		BaseType m_value;
@@ -539,68 +537,36 @@ namespace fpm
 #pragma region Multiplication
 
 	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator*(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator*(fixed<B, I, F, R> x, const fixed<B, I, F, R>& y) noexcept
 	{
-		if constexpr(R)
-		{
-			if constexpr(std::is_signed_v<B> && F >= 1 && F <= sizeof(B) * 8 - 1)
-				return fixed<B, I, F, R>::from_raw_value(detail::multiply_rounded<B, I, F>(x.raw_value(), y.raw_value()));
-
-			// Normal fixed-point multiplication is: x * y / 2**FractionBits.
-			// To correctly round the last bit in the result, we need one more bit of information.
-			// We do this by multiplying by two before dividing and adding the LSB to the real result.
-			const auto value = (static_cast<I>(x.raw_value()) * y.raw_value()) / (fixed<B, I, F, R>::FRACTION_MULT / 2);
-			return fixed<B, I, F, R>::from_raw_value(static_cast<B>((value / 2) + (value % 2)));
-		}
-		else
-		{
-			const auto value = (static_cast<I>(x.raw_value()) * y.raw_value()) / fixed<B, I, F, R>::FRACTION_MULT;
-			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(value));
-		}
+		return x *= y;
 	}
 
 	template<typename B, typename I, uint32_t F, bool R, std::integral T>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator*(const fixed<B, I, F, R>& x, T y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator*(fixed<B, I, F, R> x, T y) noexcept
 	{
-		return fixed<B, I, F, R>::from_raw_value(x.raw_value() * y);
+		return x *= y;
 	}
 
 	template<typename B, typename I, uint32_t F, bool R, std::integral T>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator*(T x, const fixed<B, I, F, R>& y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator*(T x, fixed<B, I, F, R> y) noexcept
 	{
-		return fixed<B, I, F, R>::from_raw_value(x * y.raw_value());
+		return y *= x;
 	}
 #pragma endregion
 
 #pragma region Division
 
 	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator/(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator/(fixed<B, I, F, R> x, const fixed<B, I, F, R>& y) noexcept
 	{
-		assert(y.raw_value() != 0);
-		if constexpr(R)
-		{
-			//if constexpr(std::is_signed_v<B> && F >= 1 && F <= sizeof(B) * 8 - 1)
-			//	return fixed<B, I, F, R>::from_raw_value(detail::divide_rounded<B, I, F>(x.raw_value(), y.raw_value()));
-
-			// Normal fixed-point division is: x * 2**FractionBits / y.
-			// To correctly round the last bit in the result, we need one more bit of information.
-			// We do this by multiplying by two before dividing and adding the LSB to the real result.
-			const auto value = (static_cast<I>(x.raw_value()) * fixed<B, I, F, R>::FRACTION_MULT * 2) / y.raw_value();
-			return fixed<B, I, F, R>::from_raw_value(static_cast<B>((value / 2) + (value % 2)));
-		}
-		else
-		{
-			const auto value = (static_cast<I>(x.raw_value()) * fixed<B, I, F, R>::FRACTION_MULT) / y.raw_value();
-			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(value));
-		}
+		return x /= y;
 	}
 
 	template<typename B, typename I, uint32_t F, std::integral T, bool R>
-	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator/(const fixed<B, I, F, R>& x, T y) noexcept
+	[[nodiscard]] inline constexpr fixed<B, I, F, R> operator/(fixed<B, I, F, R> x, T y) noexcept
 	{
-		assert(y != 0);
-		return fixed<B, I, F, R>::from_raw_value(x.raw_value() / y);
+		return x /= y;
 	}
 
 	template<typename B, typename I, uint32_t F, std::integral T, bool R>
@@ -615,59 +581,31 @@ namespace fpm
 
 #pragma region Comparison operators
 
+	// The other operators (`!=`, `<`, `>=`, ..., and the ones with the integer first) are derived from these
+
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr bool operator==(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
 	{
 		return x.raw_value() == y.raw_value();
 	}
 
-	template<typename B, typename I, uint32_t F, std::integral T, bool R>
-	[[nodiscard]] inline constexpr bool operator==(const fixed<B, I, F, R>& x, const T y) noexcept
-	{
-		return x == fixed<B, I, F, R>{y};
-	}
-
-	template<typename B, typename I, uint32_t F, std::integral T, bool R>
-	[[nodiscard]] inline constexpr bool operator==(const T x, const fixed<B, I, F, R>& y) noexcept
-	{
-		return fixed<B, I, F, R>{x} == y;
-	}
-
 	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr auto operator<=>(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
+	[[nodiscard]] inline constexpr std::strong_ordering operator<=>(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
 	{
 		return x.raw_value() <=> y.raw_value();
 	}
 
-
-	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr bool operator!=(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
+	/// Comparisons with integers are exact, also for integers that the fixed-point type cannot represent
+	template<typename B, typename I, uint32_t F, std::integral T, bool R>
+	[[nodiscard]] inline constexpr bool operator==(const fixed<B, I, F, R>& x, const T y) noexcept
 	{
-		return x.raw_value() != y.raw_value();
+		return detail::equals_integer<F>(x.raw_value(), y);
 	}
 
-	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr bool operator<(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
+	template<typename B, typename I, uint32_t F, std::integral T, bool R>
+	[[nodiscard]] inline constexpr std::strong_ordering operator<=>(const fixed<B, I, F, R>& x, const T y) noexcept
 	{
-		return x.raw_value() < y.raw_value();
-	}
-
-	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr bool operator>(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
-	{
-		return x.raw_value() > y.raw_value();
-	}
-
-	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr bool operator<=(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
-	{
-		return x.raw_value() <= y.raw_value();
-	}
-
-	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] inline constexpr bool operator>=(const fixed<B, I, F, R>& x, const fixed<B, I, F, R>& y) noexcept
-	{
-		return x.raw_value() >= y.raw_value();
+		return detail::compare_with_integer<F>(x.raw_value(), y);
 	}
 
 #pragma endregion
@@ -675,7 +613,7 @@ namespace fpm
 	namespace detail
 	{
 		/// Number of base-10 digits required to fully represent a number of bits.
-		[[nodiscard]] inline static constexpr int max_digits10(const int bits) noexcept
+		[[nodiscard]] inline constexpr int max_digits10(const int bits) noexcept
 		{
 			// 8.24 fixed-point equivalent of (int)ceil(bits * std::log10(2));
 			using T = int64_t;
@@ -683,7 +621,7 @@ namespace fpm
 		}
 
 		/// Number of base-10 digits that can be fully represented by a number of bits.
-		[[nodiscard]] inline static constexpr int digits10(const int bits) noexcept
+		[[nodiscard]] inline constexpr int digits10(const int bits) noexcept
 		{
 			// 8.24 fixed-point equivalent of (int)(bits * std::log10(2));
 			using T = int64_t;
@@ -759,9 +697,10 @@ namespace std
 			return fpm::fixed<B,I,F,R>::from_raw_value(std::numeric_limits<B>::lowest());
 		};
 
+		/// The smallest positive value, like for floating-point types (not the lowest value, like for integers)
 		static constexpr fpm::fixed<B,I,F,R> min() noexcept
 		{
-			return lowest();
+			return fpm::fixed<B,I,F,R>::from_raw_value(1);
 		}
 
 		static constexpr fpm::fixed<B,I,F,R> max() noexcept
@@ -776,7 +715,7 @@ namespace std
 
 		static constexpr fpm::fixed<B,I,F,R> round_error() noexcept
 		{
-			// 0.5, even for types that cannot represent 1
+			// 0.5
 			return fpm::fixed<B,I,F,R>::from_raw_value(static_cast<B>(B{1} << (F - 1)));
 		};
 
@@ -785,53 +724,6 @@ namespace std
 			return min();
 		}
 	};
-
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::is_specialized;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::is_signed;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::is_integer;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::is_exact;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::has_infinity;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::has_quiet_NaN;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::has_signaling_NaN;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr std::float_denorm_style numeric_limits<fpm::fixed<B,I,F,R>>::has_denorm;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::has_denorm_loss;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr std::float_round_style numeric_limits<fpm::fixed<B,I,F,R>>::round_style;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::is_iec559;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::is_bounded;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::is_modulo;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr int numeric_limits<fpm::fixed<B,I,F,R>>::digits;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr int numeric_limits<fpm::fixed<B,I,F,R>>::digits10;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr int numeric_limits<fpm::fixed<B,I,F,R>>::max_digits10;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr int numeric_limits<fpm::fixed<B,I,F,R>>::radix;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr int numeric_limits<fpm::fixed<B,I,F,R>>::min_exponent;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr int numeric_limits<fpm::fixed<B,I,F,R>>::min_exponent10;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr int numeric_limits<fpm::fixed<B,I,F,R>>::max_exponent;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr int numeric_limits<fpm::fixed<B,I,F,R>>::max_exponent10;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::traps;
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr bool numeric_limits<fpm::fixed<B,I,F,R>>::tinyness_before;
 
 #pragma endregion
 

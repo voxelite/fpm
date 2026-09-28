@@ -27,7 +27,7 @@ TEST(manipulation, nextafter)
 	EXPECT_EQ(P::from_raw_value(0x10001), nextafter(P(1), P(10)));
 	EXPECT_EQ(P::from_raw_value(-0x0ffff), nextafter(P(-1), P(10)));
 
-	EXPECT_EQ(P::from_raw_value(-1), nextafter(P(0), std::numeric_limits<P>::min()));
+	EXPECT_EQ(P::from_raw_value(-1), nextafter(P(0), std::numeric_limits<P>::lowest()));
 	EXPECT_EQ(P::from_raw_value(0x0ffff), nextafter(P(1), P(-10)));
 	EXPECT_EQ(P::from_raw_value(-0x10001), nextafter(P(-1), P(-10)));
 }
@@ -43,7 +43,7 @@ TEST(manipulation, nexttoward)
 	EXPECT_EQ(P::from_raw_value(0x10001), nexttoward(P(1), P(10)));
 	EXPECT_EQ(P::from_raw_value(-0x0ffff), nexttoward(P(-1), P(10)));
 
-	EXPECT_EQ(P::from_raw_value(-1), nexttoward(P(0), std::numeric_limits<P>::min()));
+	EXPECT_EQ(P::from_raw_value(-1), nexttoward(P(0), std::numeric_limits<P>::lowest()));
 	EXPECT_EQ(P::from_raw_value(0x0ffff), nexttoward(P(1), P(-10)));
 	EXPECT_EQ(P::from_raw_value(-0x10001), nexttoward(P(-1), P(-10)));
 }

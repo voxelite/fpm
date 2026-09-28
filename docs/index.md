@@ -11,10 +11,13 @@ It is designed to serve as a drop-in replacement for floating-point types and ai
 ```c++
 namespace fpm
 {
-	template<typename BaseType, typename IntermediateType, uint32_t FractionBits>
+	template<typename BaseType, typename IntermediateType, uint32_t FractionBits, bool EnableRounding = true>
 	struct fixed;
 }
 ```
+The fraction must leave at least one bit (besides the sign bit) for the integral part, so every type can represent 1:
+a 32-bit signed type has at most 30 fraction bits, a 32-bit unsigned type at most 31.
+
 **Note:** It's recommended to use a *signed* integer type for `BaseType` (and `IntermediateType`) to emulate floating-point numbers
 and to allow the compiler to optimize the computations, since overflow and underflow are undefined
 for signed integer types.
@@ -41,8 +44,27 @@ namespace fpm
 	using fixed_32_32 = fixed<std::int64_t, FPM_INT128, 32>;     // and fixed_56_8 ... fixed_8_56
 }
 ```
-The 64-bit types use `__int128` (GCC, Clang) or `std::_Signed128` (MSVC) as intermediate type. Define `FPM_INT128` to use another
-128-bit type, or `FPM_NO_INT128` to not use 128-bit integers at all (then the 64-bit types are not available).
+The 64-bit types use `__int128` (GCC, Clang) or `std::_Signed128` (MSVC and clang-cl) as intermediate type. Define `FPM_INT128` to use another
+128-bit type, or `FPM_NO_INT128` to not use 128-bit integers at all. Without a 128-bit type, as on most 32-bit targets, the 64-bit types are not available.
+
+## Fractions
+A `fpm::fixed` type cannot use all its bits for the fraction. For values in [0, 1) that do, the header `<fpm/fraction.hpp>`
+provides `fpm::fraction`, templated on the unsigned integer type that stores it:
+```c++
+#include <fpm/fraction.hpp>
+
+using angle = fpm::fraction<std::uint16_t>; // a part of a full turn, in steps of 1/65536
+
+angle a { 0.75 };
+a += angle { 0.5 };                         // wraps around: 0.25
+auto radians = fpm::fixed_16_16 { a } * fpm::fixed_16_16::two_pi();
+```
+It is meant to store such values, not to calculate with them: it has no mathematical functions, text conversions or specializations.
+* A fraction wraps around (modulo 1) instead of overflowing, for all its operations.
+* It supports `+`, `-` and negation, `*` and `/` by an integer, and comparisons (of the values in [0, 1)).
+* It converts explicitly to and from floating-point types and `fpm::fixed` types. The conversion from a fixed-point number takes its fraction
+  (so -0.25 becomes 0.75); the conversion from a floating-point number requires a number in [0, 1).
+* For anything else, convert it to a `fpm::fixed` type.
 
 ## Mathematical functions
 FPM offers the header `<fpm/math.hpp>` with mathematical functions that operate on its fixed-point types, similar to `<math.hpp>` for floating-point types.
@@ -57,7 +79,8 @@ Notes:
 * all functions are in the `fpm` namespace, and all are `constexpr`.
 * certain functions will always return the same value (e.g. `isnan` and `isinf` will always return false).
 * `sqrt`, `cbrt` and `hypot` are correctly rounded; `floor`, `ceil`, `trunc`, `round`, `nearbyint`, `rint`, `modf`, `fmod`, `remainder` and `remquo` are exact.
-  Like their standard counterparts, `remainder` and `remquo` round the quotient to nearest (ties to even), and `pow(x, 0)` is 1 for any `x` (including 0).
+  Like their standard counterparts, `remainder` and `remquo` round the quotient to nearest (ties to even), `pow(x, 0)` is 1 for any `x` (including 0),
+  and `atan2(0, 0)` is 0.
 * the other functions are approximations with minimax polynomials, whose degree is chosen at compile time for the type's fraction bits:
   more fraction bits mean a longer polynomial (more precise, slower and larger), fewer mean a shorter one.
   The polynomials are evaluated with all the bits of the base type (e.g. 30 fraction bits for 32-bit types), with the products in the intermediate type:
@@ -76,7 +99,9 @@ Notes:
 ## Specialized customization points
 The header `<fpm/fixed.hpp>` provides specializations for `fpm::fixed` for the following types:
 * `std::hash`
-* `std::numeric_limits`
+* `std::numeric_limits`. Like for floating-point types, `min()` is the smallest positive value and `lowest()` the most negative one.
+
+The header `<fpm/format.hpp>` provides the specialization of `std::formatter`.
 
 ## Conversions
 The intent behind `fpm` is to replace floats for purposes of performance or portability. Thus, it guards against accidental usage of floats by requiring explicit conversion:
@@ -95,8 +120,12 @@ fpm::fixed_16_16 b { 2 };      // OK: explicit construction from int
 fpm::fixed_16_16 c = b / 2;    // OK
 int d = b;                     // Error: requires explicit conversion
 int e = static_cast<int>(b);   // OK: explicit conversion to int
+bool f = b < 3;                // OK: comparison with an integer
 ```
 You must still guard against underflow and overflow, though.
+
+Arithmetic and comparisons with integers work for signed and unsigned integers alike (e.g. `total / values.size()`).
+Comparisons with integers are exact, also for integers that the fixed-point type cannot represent.
 
 `fpm::fixed<A, B, C>` can be constructed from an `fpm::fixed<D, E, F>` via explicit construction. This allows for conversion between fixed-point numbers of differing precision and range.
 Depending on the respective underlying types and number of fraction bits, this conversion may throw away high bits in the integral or low bits in the fraction.
@@ -120,11 +149,21 @@ int main()
 ```
 
 Reading fixed point numbers works similarly, by streaming `fpm::fixed` types from a `std::istream`.
+Like for the built-in types, a value that is out of range (or infinity) stores the nearest value, the maximum or the lowest, and sets the stream's `failbit`.
 
 `fpm`'s implementation of the streaming operators emulates streaming native floats as closely as possible without using floating-point types.
 
+### Formatting
+The `<fpm/format.hpp>` header provides `std::format` support, with the same format specifications as floating-point types (except `L`).
+It does not depend on streams or locales, so it suits targets where those are too large. `<fpm/ios.hpp>` includes it as well.
+```c++
+#include <fpm/format.hpp>
+
+std::string text = std::format("{:8.3f}", fpm::fixed_16_16{3.14159}); // "   3.142"
+```
+
 ### Character conversions
-The `<fpm/charconv.hpp>` header (also included by `<fpm/ios.hpp>`) provides `fpm::to_chars`, `fpm::from_chars` and `fpm::to_string`,
+The `<fpm/charconv.hpp>` header (also included by `<fpm/format.hpp>` and `<fpm/ios.hpp>`) provides `fpm::to_chars`, `fpm::from_chars` and `fpm::to_string`,
 which behave like their standard counterparts for `double`. They are locale-independent, exact, use only integer arithmetic and are `constexpr`:
 ```c++
 #include <fpm/charconv.hpp>
@@ -140,7 +179,7 @@ if(auto result = fpm::from_chars(buffer, end, y)) { /* y == x */ }
 * Without a precision, `to_chars` and `to_string` produce the shortest text that `from_chars` converts back to the same value, like C++26 `std::to_string` and `std::format("{}", value)`.
 * With a precision, `to_chars` behaves like `printf` with `%f`, `%e`, `%g` or `%a` (without `0x`), rounding exactly with ties to even.
 * `from_chars` rounds exactly to the nearest value (ties to even), or truncates for types without rounding. Values out of range, as well as infinity and NaN, give `std::errc::result_out_of_range` and leave the value unmodified.
-* Overloads in namespace `std` are provided for backward compatibility, but prefer the `fpm::` versions (also found by argument-dependent lookup).
+* Call them as `fpm::to_chars(...)` or unqualified (they are found by argument-dependent lookup). There are no overloads in namespace `std`: the standard does not allow adding them.
 
 ## Common constants
 The following static member functions in the `fpm::fixed` class provide common mathematical constants in the fixed type:

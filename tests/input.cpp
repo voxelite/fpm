@@ -65,6 +65,28 @@ namespace
 			EXPECT_EQ(get_remainder(ss), expected_remaining) << "for text: \"" << text << "\"";
 		}
 
+		/// Values that are out of range: the nearest value is stored and the extraction fails,
+		/// like for the built-in types
+		template<typename B, typename I, uint32_t F>
+		void test_out_of_range(
+			const std::string& text,
+			fpm::fixed<B, I, F> expected,
+			const std::string& expected_remaining = ""
+		)
+		{
+			std::istringstream ss(text);
+			ss.imbue(m_locale);
+
+			fpm::fixed<B, I, F> value{};
+			ss >> value;
+
+			EXPECT_EQ(value, expected) << "for text: \"" << text << "\"";
+			EXPECT_TRUE(ss.fail()) << "for text: \"" << text << "\"";
+			EXPECT_FALSE(ss.bad()) << "for text: \"" << text << "\"";
+
+			EXPECT_EQ(get_remainder(ss), expected_remaining) << "for text: \"" << text << "\"";
+		}
+
 		void test_invalid_conversion(
 			const std::string& text,
 			const std::string& expected_remaining = ""
@@ -288,15 +310,17 @@ TEST_F(input, incorrect_inputs)
 TEST_F(input, overflow)
 {
 	using P = fpm::fixed_16_16;
+	const auto max = std::numeric_limits<P>::max();
+	const auto lowest = std::numeric_limits<P>::lowest();
 
-	test_conversion("1e100", std::numeric_limits<P>::max());
-	test_conversion("-1e100", std::numeric_limits<P>::min());
+	test_out_of_range("1e100", max);
+	test_out_of_range("-1e100", lowest);
 
-	test_conversion("100000", std::numeric_limits<P>::max());
-	test_conversion("-100000", std::numeric_limits<P>::min());
+	test_out_of_range("100000", max);
+	test_out_of_range("-100000", lowest);
 
-	test_conversion("1000000000000000000000000000000000000000000000", std::numeric_limits<P>::max());
-	test_conversion("-1000000000000000000000000000000000000000000000", std::numeric_limits<P>::min());
+	test_out_of_range("1000000000000000000000000000000000000000000000", max);
+	test_out_of_range("-1000000000000000000000000000000000000000000000", lowest);
 }
 
 TEST_F(input, overflow_saturates)
@@ -306,12 +330,12 @@ TEST_F(input, overflow_saturates)
 	const auto lowest = std::numeric_limits<P>::lowest();
 
 	// Just out of range: these used to wrap around
-	test_conversion("32768", max);
-	test_conversion("-32769", lowest);
-	test_conversion("40000", max);
-	test_conversion("4e4", max);
-	test_conversion("32767.999993", max);  // rounds up to 32768
-	test_conversion("-32768.000008", lowest);
+	test_out_of_range("32768", max);
+	test_out_of_range("-32769", lowest);
+	test_out_of_range("40000", max);
+	test_out_of_range("4e4", max);
+	test_out_of_range("32767.999993", max);  // rounds up to 32768
+	test_out_of_range("-32768.000008", lowest);
 
 	// Exactly in range
 	test_conversion("-32768", lowest);
@@ -319,14 +343,14 @@ TEST_F(input, overflow_saturates)
 	test_conversion("32767.99999", max);   // rounds down to the maximum
 
 	// Huge binary exponents (used to be undefined behavior)
-	test_conversion("0x1p100", max);
-	test_conversion("-0x1p100", lowest);
+	test_out_of_range("0x1p100", max);
+	test_out_of_range("-0x1p100", lowest);
 	test_conversion("0x1p-100", P(0));
-	test_conversion("0x1p2147483647", max);
+	test_out_of_range("0x1p2147483647", max);
 
 	// Huge decimal exponents are fast
 	test_conversion("1e-2000000000", P(0));
-	test_conversion("1e2000000000", max);
+	test_out_of_range("1e2000000000", max);
 }
 
 TEST_F(input, rounding)
@@ -343,8 +367,8 @@ TEST_F(input, rounding)
 TEST_F(input, case_insensitive_infinity)
 {
 	using P = fpm::fixed_16_16;
-	test_conversion("INF", std::numeric_limits<P>::max());
-	test_conversion("-Infinity", std::numeric_limits<P>::lowest());
+	test_out_of_range("INF", std::numeric_limits<P>::max());
+	test_out_of_range("-Infinity", std::numeric_limits<P>::lowest());
 }
 
 TEST_F(input, non_ascii)
@@ -385,11 +409,12 @@ TEST_F(input, infinity)
 {
 	using P = fpm::fixed_16_16;
 
-	test_conversion("inf", std::numeric_limits<P>::max());
-	test_conversion("infinity", std::numeric_limits<P>::max());
+	// Infinity cannot be represented: like a value that is out of range
+	test_out_of_range("inf", std::numeric_limits<P>::max());
+	test_out_of_range("infinity", std::numeric_limits<P>::max());
 
-	test_conversion("-inf", std::numeric_limits<P>::min());
-	test_conversion("-infinity", std::numeric_limits<P>::min());
+	test_out_of_range("-inf", std::numeric_limits<P>::lowest());
+	test_out_of_range("-infinity", std::numeric_limits<P>::lowest());
 
 	test_invalid_conversion("infinit", "");
 	test_invalid_conversion("infini", "");
@@ -398,7 +423,7 @@ TEST_F(input, infinity)
 	test_invalid_conversion("in", "");
 	test_invalid_conversion("i", "");
 
-	test_conversion("infa", std::numeric_limits<P>::max(), "a");
+	test_out_of_range("infa", std::numeric_limits<P>::max(), "a");
 	test_invalid_conversion("infinix", "x");
 	test_invalid_conversion("ib", "b");
 	test_invalid_conversion("-ic", "c");

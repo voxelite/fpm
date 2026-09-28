@@ -67,7 +67,7 @@ struct Limits<fpm::fixed_8_8>
 	static constexpr int max_exponent() noexcept { return  7; }
 	static constexpr int min_exponent10() noexcept { return -2; }
 	static constexpr int max_exponent10() noexcept { return  2; }
-	static constexpr fpm::fixed_8_8 min() noexcept { return fpm::fixed_8_8::from_raw_value(-32767 - 1); }
+	static constexpr fpm::fixed_8_8 lowest() noexcept { return fpm::fixed_8_8::from_raw_value(-32767 - 1); }
 	static constexpr fpm::fixed_8_8 max() noexcept { return fpm::fixed_8_8::from_raw_value( 32767); }
 };
 
@@ -81,7 +81,7 @@ struct Limits<fpm::fixed_16_16>
 	static constexpr int max_exponent() noexcept { return  15; }
 	static constexpr int min_exponent10() noexcept { return -4; }
 	static constexpr int max_exponent10() noexcept { return 4; }
-	static constexpr fpm::fixed_16_16 min() noexcept { return fpm::fixed_16_16::from_raw_value(-2147483647 - 1); }
+	static constexpr fpm::fixed_16_16 lowest() noexcept { return fpm::fixed_16_16::from_raw_value(-2147483647 - 1); }
 	static constexpr fpm::fixed_16_16 max() noexcept { return fpm::fixed_16_16::from_raw_value( 2147483647); }
 };
 
@@ -95,7 +95,7 @@ struct Limits<fpm::fixed_24_8>
 	static constexpr int max_exponent() noexcept { return 23; }
 	static constexpr int min_exponent10() noexcept { return -2; }
 	static constexpr int max_exponent10() noexcept { return 6; }
-	static constexpr fpm::fixed_24_8 min() noexcept { return fpm::fixed_24_8::from_raw_value(-2147483647 - 1); }
+	static constexpr fpm::fixed_24_8 lowest() noexcept { return fpm::fixed_24_8::from_raw_value(-2147483647 - 1); }
 	static constexpr fpm::fixed_24_8 max() noexcept { return fpm::fixed_24_8::from_raw_value( 2147483647); }
 };
 
@@ -109,7 +109,7 @@ struct Limits<fpm::fixed_8_24>
 	static constexpr int max_exponent() noexcept { return  7; }
 	static constexpr int min_exponent10() noexcept { return -7; }
 	static constexpr int max_exponent10() noexcept { return  2; }
-	static constexpr fpm::fixed_8_24 min() noexcept { return fpm::fixed_8_24::from_raw_value(-2147483647 - 1); }
+	static constexpr fpm::fixed_8_24 lowest() noexcept { return fpm::fixed_8_24::from_raw_value(-2147483647 - 1); }
 	static constexpr fpm::fixed_8_24 max() noexcept { return fpm::fixed_8_24::from_raw_value( 2147483647); }
 };
 
@@ -124,7 +124,7 @@ struct Limits<fpm::fixed_32_32>
 	static constexpr int max_exponent() noexcept { return  31; }
 	static constexpr int min_exponent10() noexcept { return -9; }
 	static constexpr int max_exponent10() noexcept { return  9; }
-	static constexpr fpm::fixed_32_32 min() noexcept { return fpm::fixed_32_32::from_raw_value(-9223372036854775807LL - 1); }
+	static constexpr fpm::fixed_32_32 lowest() noexcept { return fpm::fixed_32_32::from_raw_value(-9223372036854775807LL - 1); }
 	static constexpr fpm::fixed_32_32 max() noexcept { return fpm::fixed_32_32::from_raw_value( 9223372036854775807LL); }
 };
 
@@ -138,7 +138,7 @@ struct Limits<fpm::fixed_24_40>
 	static constexpr int max_exponent() noexcept { return  23; }
 	static constexpr int min_exponent10() noexcept { return -12; }
 	static constexpr int max_exponent10() noexcept { return  6; }
-	static constexpr fpm::fixed_24_40 min() noexcept { return fpm::fixed_24_40::from_raw_value(-9223372036854775807LL - 1); }
+	static constexpr fpm::fixed_24_40 lowest() noexcept { return fpm::fixed_24_40::from_raw_value(-9223372036854775807LL - 1); }
 	static constexpr fpm::fixed_24_40 max() noexcept { return fpm::fixed_24_40::from_raw_value( 9223372036854775807LL); }
 };
 
@@ -152,7 +152,7 @@ struct Limits<fpm::fixed_16_48>
 	static constexpr int max_exponent() noexcept { return  15; }
 	static constexpr int min_exponent10() noexcept { return -14; }
 	static constexpr int max_exponent10() noexcept { return  4; }
-	static constexpr fpm::fixed_16_48 min() noexcept { return fpm::fixed_16_48::from_raw_value(-9223372036854775807LL - 1); }
+	static constexpr fpm::fixed_16_48 lowest() noexcept { return fpm::fixed_16_48::from_raw_value(-9223372036854775807LL - 1); }
 	static constexpr fpm::fixed_16_48 max() noexcept { return fpm::fixed_16_48::from_raw_value( 9223372036854775807LL); }
 };
 
@@ -166,7 +166,7 @@ struct Limits<fpm::fixed_40_24>
 	static constexpr int max_exponent() noexcept { return  39; }
 	static constexpr int min_exponent10() noexcept { return -7; }
 	static constexpr int max_exponent10() noexcept { return  11; }
-	static constexpr fpm::fixed_40_24 min() noexcept { return fpm::fixed_40_24::from_raw_value(-9223372036854775807LL - 1); }
+	static constexpr fpm::fixed_40_24 lowest() noexcept { return fpm::fixed_40_24::from_raw_value(-9223372036854775807LL - 1); }
 	static constexpr fpm::fixed_40_24 max() noexcept { return fpm::fixed_40_24::from_raw_value( 9223372036854775807LL); }
 };
 
@@ -180,7 +180,7 @@ struct Limits<fpm::fixed_48_16>
 	static constexpr int max_exponent() noexcept { return  47; }
 	static constexpr int min_exponent10() noexcept { return -4; }
 	static constexpr int max_exponent10() noexcept { return  14; }
-	static constexpr fpm::fixed_48_16 min() noexcept { return fpm::fixed_48_16::from_raw_value(-9223372036854775807LL - 1); }
+	static constexpr fpm::fixed_48_16 lowest() noexcept { return fpm::fixed_48_16::from_raw_value(-9223372036854775807LL - 1); }
 	static constexpr fpm::fixed_48_16 max() noexcept { return fpm::fixed_48_16::from_raw_value( 9223372036854775807LL); }
 };
 #endif
@@ -214,22 +214,42 @@ TYPED_TEST(customizations, numeric_limits)
 	EXPECT_EQ(L::traps, true);
 	EXPECT_EQ(L::tinyness_before, false);
 
-	EXPECT_EQ(L::min(), TL::min());
-	EXPECT_EQ(L::lowest(), TL::min());
+	EXPECT_EQ(L::min(), TypeParam::from_raw_value(1));
+	EXPECT_EQ(L::lowest(), TL::lowest());
 	EXPECT_EQ(L::max(), TL::max());
 	EXPECT_EQ(L::epsilon(), TypeParam::from_raw_value(1));
 	EXPECT_EQ(L::round_error(), TypeParam(0.5));
-	EXPECT_EQ(L::denorm_min(), TL::min());
+	EXPECT_EQ(L::denorm_min(), TypeParam::from_raw_value(1));
 }
 
-// Verify that a a type with a single integral bit works correctly
+// Verify that types with a single integral bit (the fewest possible) work correctly
 TEST(customizations, numeric_limits_edge)
 {
-	using Q15 = fpm::fixed<int16_t, int32_t, 15>;
-	EXPECT_TRUE(HasMaximumError(static_cast<double>(std::numeric_limits<Q15>::max()), 0.999, 0.01));
-	EXPECT_EQ(-1.0, static_cast<double>(std::numeric_limits<Q15>::lowest()));
+	using Q14 = fpm::fixed<int16_t, int32_t, 14>;
+	EXPECT_TRUE(HasMaximumError(static_cast<double>(std::numeric_limits<Q14>::max()), 1.999, 0.01));
+	EXPECT_EQ(-2.0, static_cast<double>(std::numeric_limits<Q14>::lowest()));
+	EXPECT_EQ(1.0, static_cast<double>(Q14{1}));
+	EXPECT_EQ(0.5, static_cast<double>(std::numeric_limits<Q14>::round_error()));
 
-	using Q31 = fpm::fixed<int32_t, int64_t, 31>;
-	EXPECT_TRUE(HasMaximumError(static_cast<double>(std::numeric_limits<Q31>::max()), 0.999, 0.01));
-	EXPECT_EQ(-1.0, static_cast<double>(std::numeric_limits<Q31>::lowest()));
+	using Q30 = fpm::fixed<int32_t, int64_t, 30>;
+	EXPECT_TRUE(HasMaximumError(static_cast<double>(std::numeric_limits<Q30>::max()), 1.999, 0.01));
+	EXPECT_EQ(-2.0, static_cast<double>(std::numeric_limits<Q30>::lowest()));
+	EXPECT_EQ(1.0, static_cast<double>(Q30{1}));
+
+	using S = fpm::fixed<int8_t, int16_t, 6>;
+	EXPECT_EQ(std::numeric_limits<S>::lowest(), S{-2});
+	EXPECT_EQ(std::numeric_limits<S>::max(), S{1.984375});
+	EXPECT_EQ(S{-1} + S{1}, S{0});
+	EXPECT_EQ(S{-2}, S{2}); // Overflow
+	EXPECT_EQ(S{0.75}, S{1.5} * S{0.5});
+	EXPECT_EQ(S{1.5}, S{0.75} / S{0.5});
+	EXPECT_EQ(S{-1.5}, S{0.75} / S{-0.5});
+
+	using U = fpm::fixed<uint8_t, uint16_t, 7>;
+	EXPECT_EQ(std::numeric_limits<U>::lowest(), U{0});
+	EXPECT_EQ(std::numeric_limits<U>::min(), U::from_raw_value(1));
+	EXPECT_EQ(std::numeric_limits<U>::max(), U{1.9921875});
+	EXPECT_EQ(U{0}, U{2}); // Overflow
+	EXPECT_EQ(U{1}, U{1.5} / U{1.5});
+	EXPECT_EQ(U{1.5}, U{1.25} * U{1.25} - U{0.0625});
 }

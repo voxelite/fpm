@@ -127,7 +127,7 @@ using CharconvTypes = ::testing::Types<
 	fpm::fixed_16_16,
 	fpm::fixed_24_8,
 	fpm::fixed_8_24,
-	fpm::fixed<int32_t, int64_t, 31>,        // single (sign) integral bit
+	fpm::fixed<int32_t, int64_t, 30>,        // single integral bit
 	fpm::fixed<int32_t, int64_t, 16, false>, // no rounding
 	fpm::fixed<uint16_t, uint32_t, 8>        // unsigned
 #ifdef FPM_INT128
@@ -532,30 +532,21 @@ TEST(charconv, to_string)
 	EXPECT_EQ("2.5", to_string(P(2.5)));
 }
 
-TEST(charconv, std_overloads)
+TEST(charconv, with_std_visible)
 {
 	using P = fpm::fixed_16_16;
 	std::array<char, 32> buffer{};
 
-	// Qualified calls into `std` keep working
-	auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), P(1.25));
-	EXPECT_EQ("1.25", std::string_view(buffer.data(), result.ptr));
-	result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), P(1.25), std::chars_format::scientific);
-	EXPECT_EQ("1.25e+00", std::string_view(buffer.data(), result.ptr));
-	result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), P(1.25), std::chars_format::fixed, 3);
-	EXPECT_EQ("1.250", std::string_view(buffer.data(), result.ptr));
+	// Unqualified calls with both `std` and `fpm` visible find the `fpm` functions
+	using std::to_chars;
+	using std::from_chars;
+	const auto result = to_chars(buffer.data(), buffer.data() + buffer.size(), P(-3));
+	EXPECT_EQ("-3", std::string_view(buffer.data(), result.ptr));
 
 	P value{};
 	const std::string_view text = "7.75";
-	EXPECT_TRUE(std::from_chars(text.data(), text.data() + text.size(), value));
-	EXPECT_EQ(P(7.75), value);
-
-	// Unqualified calls with both `std` and `fpm` visible are not ambiguous
-	using std::to_chars;
-	using std::from_chars;
-	result = to_chars(buffer.data(), buffer.data() + buffer.size(), P(-3));
-	EXPECT_EQ("-3", std::string_view(buffer.data(), result.ptr));
 	EXPECT_TRUE(from_chars(text.data(), text.data() + text.size(), value, std::chars_format::fixed));
+	EXPECT_EQ(P(7.75), value);
 }
 
 TEST(charconv, format_default_is_shortest)

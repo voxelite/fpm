@@ -1,15 +1,10 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(fpm C CXX)
+project(fpm CXX)
 
 include(GNUInstallDirs)
 
 add_library(fpm INTERFACE)
-
-set_target_properties(fpm PROPERTIES
-  CXX_STANDARD 26
-  CXX_STANDARD_REQUIRED ON
-)
 target_compile_features(fpm INTERFACE cxx_std_26)
 
 target_include_directories(fpm INTERFACE include)
@@ -17,6 +12,8 @@ target_include_directories(fpm INTERFACE include)
 install(FILES
   include/fpm/charconv.hpp
   include/fpm/fixed.hpp
+  include/fpm/format.hpp
+  include/fpm/fraction.hpp
   include/fpm/ios.hpp
   include/fpm/math.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fpm
@@ -26,21 +23,15 @@ install(FILES
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fpm/detail
 )
 
-OPTION(BUILD_ACCURACY  "fpm accuracy"  ON)
-OPTION(BUILD_BENCHMARK "fpm benchmark" ON)
-OPTION(BUILD_TESTS     "fpm tests"     ON)
-
-# only build tests & benchmarks if a top-level project
-if(NOT CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
-  set(BUILD_ACCURACY  OFF)
-  set(BUILD_BENCHMARK OFF)
-  set(BUILD_TESTS     OFF)
-endif()
+# Tests, benchmarks and the accuracy tool are only built by default if this is the top-level project
+option(FPM_BUILD_ACCURACY  "Build the fpm accuracy tool" ${PROJECT_IS_TOP_LEVEL})
+option(FPM_BUILD_BENCHMARK "Build the fpm benchmarks"    ${PROJECT_IS_TOP_LEVEL})
+option(FPM_BUILD_TESTS     "Build the fpm tests"         ${PROJECT_IS_TOP_LEVEL})
 
 #
 # Test suite
 #
-if(BUILD_TESTS)
+if(FPM_BUILD_TESTS)
   enable_testing()
   include(GoogleTest)
 
@@ -58,7 +49,7 @@ if(BUILD_TESTS)
     tests/detail.cpp
     tests/formatting.cpp
     tests/formatting_wchar.cpp
-    tests/fraction_only.cpp
+    tests/fraction.cpp
     tests/from.cpp
     tests/input.cpp
     tests/int128.cpp
@@ -80,9 +71,9 @@ endif()
 #
 # libfixmath for alternative comparison
 #
-include(ExternalProject)
-
-if(BUILD_ACCURACY OR BUILD_BENCHMARK)
+if(FPM_BUILD_ACCURACY OR FPM_BUILD_BENCHMARK)
+  include(ExternalProject)
+  enable_language(C)
 
   # Libfixmath uses a Makefile with hardcoded compiler (gcc).
   # So we need to define our own build rules.
@@ -127,7 +118,7 @@ if(BUILD_ACCURACY OR BUILD_BENCHMARK)
 
 endif()
 
-if(BUILD_ACCURACY OR BUILD_BENCHMARK)
+if(FPM_BUILD_ACCURACY OR FPM_BUILD_BENCHMARK)
   #
   # CNL for alternative comparison
   #
@@ -147,7 +138,7 @@ if(BUILD_ACCURACY OR BUILD_BENCHMARK)
   add_dependencies(libcnl libcnl-external)
 endif()
 
-if(BUILD_BENCHMARK)
+if(FPM_BUILD_BENCHMARK)
   #
   # Benchmark tool.
   # Runs benchmarks of FPM operations and dumps results to standard output.
@@ -162,7 +153,7 @@ if(BUILD_BENCHMARK)
   target_link_libraries(fpm-benchmark PRIVATE fpm libfixmath libcnl benchmark benchmark_main)
 endif()
 
-if(BUILD_ACCURACY)
+if(FPM_BUILD_ACCURACY)
   #
   # Accuracy tool.
   # Dumps the accuracy of approximated FPM functions to JSON files.
@@ -175,8 +166,10 @@ endif()
 
 set(DATA_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
-include(FindGnuplot)
-if(GNUPLOT_FOUND AND BUILD_ACCURACY)
+if(FPM_BUILD_ACCURACY OR FPM_BUILD_BENCHMARK)
+  find_package(Gnuplot)
+endif()
+if(GNUPLOT_FOUND AND FPM_BUILD_ACCURACY)
   # Create accuracy data
   set(DATA_FILES_ACCURACY "")
   set(IMG_FILES_ACCURACY "")
@@ -211,7 +204,7 @@ if(GNUPLOT_FOUND AND BUILD_ACCURACY)
   add_custom_target(fpm-accuracy-images DEPENDS ${IMG_FILES_ACCURACY})
 endif()
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release" AND GNUPLOT_FOUND AND BUILD_BENCHMARK)
+if(CMAKE_BUILD_TYPE STREQUAL "Release" AND GNUPLOT_FOUND AND FPM_BUILD_BENCHMARK)
   # Enable the performance data-generation command only for Release builds.
 
   set(DATA_FILE_PERFORMANCE_JSON ${DATA_DIR}/performance.json)
@@ -247,10 +240,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" AND GNUPLOT_FOUND AND BUILD_BENCHMARK)
   add_custom_target(fpm-performance-images DEPENDS ${IMG_FILE_PERFORMANCE})
 endif()
 
-if(BUILD_BENCHMARK)
+if(FPM_BUILD_BENCHMARK)
   add_subdirectory(3rdparty/googlebench)
 endif()
 
-if(BUILD_TESTS)
+if(FPM_BUILD_TESTS)
   add_subdirectory(3rdparty/googletest)
 endif()

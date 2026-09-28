@@ -3,9 +3,6 @@ A C++ header-only fixed-point math library. "fpm" stands for "fixed-point math".
 
 It is designed to serve as a drop-in replacement for floating-point types and aims to provide as much of the standard library's functionality as possible with exclusively integers. `fpm` requires C++26.
 
-[![Build Status](https://travis-ci.org/MikeLankamp/fpm.svg?branch=master)](https://travis-ci.org/MikeLankamp/fpm)
-[![Build status](https://ci.appveyor.com/api/projects/status/0velpwqk38spu412?svg=true)](https://ci.appveyor.com/project/MikeLankamp/fpm)
-
 `fpm` is designed to guard against accidental conversion to and from floats and supports many of the standard C++ maths functions, including trigonometry, power and logarithmic functions, with performance and accuracy generally comparable to alternative libraries.
 
 ## Why use fixed-point math?
@@ -23,7 +20,7 @@ types as if they were native floating-pointer types:
 ```c++
 #include <fpm/fixed.hpp>  // For fpm::fixed_16_16
 #include <fpm/math.hpp>   // For fpm::cos
-#include <fpm/ios.hpp>    // For fpm::operator<< and std::format
+#include <fpm/ios.hpp>    // For fpm::operator<< and fpm::operator>>
 #include <iostream>       // For std::cin, std::cout
 
 int main()
@@ -37,7 +34,9 @@ int main()
 ```
 
 To use the fixed-point equivalents of the `<math.h>` functions such as `sqrt`, `sin` and `log`, include the header `<fpm/math.hpp>`.
-To stream fixed-point values to or from streams, or to use them with `std::format`, include the header `<fpm/ios.hpp>`.
+To stream fixed-point values to or from streams, include the header `<fpm/ios.hpp>`.
+To use them with `std::format` (without the dependency on streams), include the header `<fpm/format.hpp>`.
+To store values in [0, 1) that wrap around, like an angle as a part of a full turn, include the header `<fpm/fraction.hpp>`.
 For locale-independent, exact and `constexpr` conversions to and from text (`fpm::to_chars`, `fpm::from_chars` and `fpm::to_string`), include `<fpm/charconv.hpp>`.
 
 ## Documentation

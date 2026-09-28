@@ -132,3 +132,17 @@ TEST(conversion, fixed_to_fixed)
 	EXPECT_EQ(0x56, S1(P::from_raw_value(0x79'AB'10'00)).raw_value());
 	EXPECT_EQ(-0x56, S1(P::from_raw_value(-0x79'AB'10'00)).raw_value());
 }
+
+// Unsigned values with the top bit set keep their value in a signed type that can hold them
+TEST(conversion, unsigned_to_signed)
+{
+	const fpm::fixed<uint16_t, uint32_t, 8> small{200};
+	EXPECT_EQ((fpm::fixed<int32_t, int64_t, 4>{200}), (fpm::fixed<int32_t, int64_t, 4>(small)));
+	EXPECT_EQ((fpm::fixed<int32_t, int64_t, 12>{200}), (fpm::fixed<int32_t, int64_t, 12>(small)));
+
+#ifdef FPM_INT128
+	const fpm::fixed<uint32_t, uint64_t, 16> large{40000};
+	EXPECT_EQ((fpm::fixed<int64_t, FPM_INT128, 8>{40000}), (fpm::fixed<int64_t, FPM_INT128, 8>(large)));
+	EXPECT_EQ((fpm::fixed<int64_t, FPM_INT128, 24>{40000}), (fpm::fixed<int64_t, FPM_INT128, 24>(large)));
+#endif
+}

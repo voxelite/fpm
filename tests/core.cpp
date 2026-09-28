@@ -276,4 +276,12 @@ TEST(core, from_custom_fraction)
 	EXPECT_EQ(fpm::fixed_16_48(-1.5), fpm::fixed_16_48::from_custom_fraction<10>(-1, -5));
 #endif
 	static_assert(P::from_custom_fraction<4>(1, 1) == P(1.25));
+
+	// Unsigned types, also with denominators too large for the intermediate type
+	using U8 = fpm::fixed<uint8_t, uint16_t, 4>;
+	EXPECT_EQ(U8(3.125), U8::from_custom_fraction<1000000>(3u, 141592u));
+	EXPECT_EQ(U8(3.5), U8::from_custom_fraction<10>(3u, 5u));
+	using U32 = fpm::fixed<uint32_t, uint64_t, 16>;
+	EXPECT_EQ(U32(3.5), U32::from_custom_fraction<1'000'000'000'000'000'000>(uint64_t{3}, uint64_t{500'000'000'000'000'000}));
+	EXPECT_EQ(U32(3.141592), U32::from_custom_fraction<1000000>(3u, 141592u));
 }

@@ -157,9 +157,8 @@ TEST(trigonometry, atan2)
 		EXPECT_TRUE(HasMaximumError(atan2_fixed, atan2_real, MAX_ERROR_PERC));
 	}
 
-#ifndef NDEBUG
-	EXPECT_DEATH(auto v = atan2(P(0), P(0)), "");
-#endif
+	// Like std::atan2, the angle of the zero vector is 0
+	EXPECT_EQ(P(0), atan2(P(0), P(0)));
 }
 
 // Naively, atan2(y, x) does y / x which would overflow for near-zero x with Q16.16.

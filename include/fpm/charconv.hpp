@@ -118,13 +118,11 @@ namespace fpm
 		{
 			using U = magnitude_t<B>;
 			constexpr int32_t N = bits<B>;
-			static_assert(F >= 1 && static_cast<int32_t>(F) <= N);
+			static_assert(F >= 1 && static_cast<int32_t>(F) < N);
 			decimal_for<B, F> d;
 
 			// Integral part
-			U integral = 0;
-			if constexpr(static_cast<int32_t>(F) < N)
-				integral = static_cast<U>(magnitude >> F);
+			auto integral = static_cast<U>(magnitude >> F);
 			std::array<uint8_t, std::numeric_limits<U>::digits10 + 1> reversed{};
 			int32_t n = 0;
 			while(integral != 0)
@@ -138,7 +136,7 @@ namespace fpm
 
 			// Fractional part: fraction = frac / 2^F. Each digit is the integral part of frac * 10.
 			// Every multiplication by ten shifts one more zero bit in at the bottom, so this terminates after at most F digits.
-			constexpr U fraction_mask = (static_cast<int32_t>(F) == N) ? static_cast<U>(~U{0}) : static_cast<U>((U{1} << (F % N)) - 1);
+			constexpr auto fraction_mask = static_cast<U>((U{1} << F) - 1);
 			const auto add_digit = [&](const uint8_t digit)
 			{
 				if(d.count == 0 && digit == 0)
@@ -166,7 +164,7 @@ namespace fpm
 			{
 				// Fewer than 4 integral bits: scale so that fraction = frac / 2^N, and compute the part of frac * 10
 				// above N bits in halves, so that no wider type is needed
-				U frac = static_cast<U>(static_cast<U>(magnitude & fraction_mask) << ((N - static_cast<int32_t>(F)) % N));
+				U frac = static_cast<U>(static_cast<U>(magnitude & fraction_mask) << (N - static_cast<int32_t>(F)));
 				constexpr int32_t half = N / 2;
 				constexpr U low_mask = static_cast<U>((U{1} << half) - 1);
 				for(int32_t position = 1; frac != 0; ++position)
@@ -331,7 +329,6 @@ namespace fpm
 		[[nodiscard]] constexpr conversion<B> from_decimal(const decimal_for<B, F>& d) noexcept
 		{
 			using U = magnitude_t<B>;
-			constexpr int32_t N = bits<B>;
 			if(d.count == 0)
 				return {0, false};
 
@@ -346,18 +343,9 @@ namespace fpm
 					return {0, true};
 				integral = static_cast<U>(integral * 10u + digit);
 			}
-			if constexpr(static_cast<int32_t>(F) == N)
-			{
-				if(integral != 0)
-					return {0, true};
-			}
-			else if(integral > static_cast<U>(limit >> F))
-			{
+			if(integral > static_cast<U>(limit >> F))
 				return {0, true};
-			}
-			U mag = 0;
-			if constexpr(static_cast<int32_t>(F) < N)
-				mag = static_cast<U>(integral << F);
+			const auto mag = static_cast<U>(integral << F);
 
 			// Fractional part. Grid points need at most F fractional digits and the midpoints between
 			// them F+1, so the first F+1 digits plus a "non-zero digits follow" flag decide the rounding exactly.
@@ -762,12 +750,11 @@ namespace fpm
 		[[nodiscard]] constexpr decimal_for<B, F> shortest(const B raw) noexcept
 		{
 			using U = magnitude_t<B>;
-			constexpr int32_t N = bits<B>;
 			const auto mag = magnitude(raw);
 			auto d = to_decimal<B, F>(mag);
 			d.negative = raw < 0;
 
-			constexpr U mask = (static_cast<int32_t>(F) == N) ? static_cast<U>(~U{0}) : static_cast<U>((U{1} << (F % N)) - 1);
+			constexpr auto mask = static_cast<U>((U{1} << F) - 1);
 			U r = static_cast<U>(mag & mask);
 			if(r == 0)
 				return d; // an integer: the expansion without trailing zeros is the shortest
@@ -1058,36 +1045,5 @@ namespace fpm
 		std::array<char, std::numeric_limits<std::make_unsigned_t<B>>::digits10 + F + 8> buffer{};
 		const auto result = fpm::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
 		return std::string(buffer.data(), result.ptr);
-	}
-}
-
-// Overloads in `std` for backward compatibility with `std::to_chars(...)` / `std::from_chars(...)` calls.
-// Prefer the `fpm::` versions (also found by argument-dependent lookup): the standard does not allow adding
-// overloads to namespace `std`. These are unconstrained so that the constrained `fpm::` versions win overload
-// resolution when both are visible (e.g. after `using std::to_chars;`).
-namespace std
-{
-	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] constexpr std::to_chars_result to_chars(char* first, char* last, const fpm::fixed<B, I, F, R> value) noexcept
-	{
-		return fpm::to_chars(first, last, value);
-	}
-
-	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] constexpr std::to_chars_result to_chars(char* first, char* last, const fpm::fixed<B, I, F, R> value, const std::chars_format fmt) noexcept
-	{
-		return fpm::to_chars(first, last, value, fmt);
-	}
-
-	template<typename B, typename I, uint32_t F, bool R>
-	[[nodiscard]] constexpr std::to_chars_result to_chars(char* first, char* last, const fpm::fixed<B, I, F, R> value, const std::chars_format fmt, const int precision) noexcept
-	{
-		return fpm::to_chars(first, last, value, fmt, precision);
-	}
-
-	template<typename B, typename I, uint32_t F, bool R>
-	constexpr std::from_chars_result from_chars(const char* first, const char* last, fpm::fixed<B, I, F, R>& value, const std::chars_format fmt = std::chars_format::general) noexcept
-	{
-		return fpm::from_chars(first, last, value, fmt);
 	}
 }
