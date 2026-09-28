@@ -1,5 +1,5 @@
 #include "common.hpp"
-#include <fpm/fraction/fraction.hpp>
+#include <fpm/fraction.hpp>
 
 #include <cmath>
 #include <random>
@@ -231,29 +231,42 @@ TYPED_TEST(fraction, floating_point)
 		EXPECT_LE(static_cast<double>(x), 1.0);
 	}
 
-	// Rounded to nearest: within half a unit of the exact value (modulo 1)
+	// Rounded to nearest: within half a unit of the exact value, or a unit for the largest fraction
 	std::mt19937_64 rng(7);
 	std::uniform_real_distribution<double> distribution(0.0, 1.0);
 	for(int i = 0; i < 10000; ++i)
 	{
-		const double value = std::min(distribution(rng), std::nextafter(1.0, 0.0));
-		long double error = std::abs(exact(P{value}) - static_cast<long double>(value));
-		if(error > 0.5L)
-			error = 1 - error;
-		EXPECT_LE(error, std::ldexp(0.5L, -static_cast<int>(P::fraction_bits))) << value;
+		// (Also close to 1)
+		const double value = std::min(i % 4 == 0 ? 1.0 - distribution(rng) / 300 : distribution(rng), std::nextafter(1.0, 0.0));
+		const P x{value};
+		const long double error = std::abs(exact(x) - static_cast<long double>(value));
+		const bool is_largest = x.raw_value() == std::numeric_limits<typename P::base_type>::max();
+		EXPECT_LE(error, std::ldexp(is_largest ? 1.0L : 0.5L, -static_cast<int>(P::fraction_bits))) << value;
 	}
 
-	// The largest values below 1 round up to 1, which wraps around to 0: unless the fraction can represent them
+	// The largest values below 1 give the largest fraction (not 1): unless the fraction can represent them
+	const auto largest = P::from_raw_value(std::numeric_limits<typename P::base_type>::max());
 	const double last_double = std::nextafter(1.0, 0.0);
 	const float last_float = std::nextafter(1.0f, 0.0f);
 	if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<double>::digits))
-		EXPECT_EQ(P{}, P{last_double});
+		EXPECT_EQ(largest, P{last_double});
 	else
 		EXPECT_EQ(static_cast<long double>(last_double), exact(P{last_double}));
 	if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<float>::digits))
-		EXPECT_EQ(P{}, P{last_float});
+		EXPECT_EQ(largest, P{last_float});
 	else
 		EXPECT_EQ(static_cast<long double>(last_float), exact(P{last_float}));
+
+	// Every number in [0, 1) gives the nearest fraction, in order
+	if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<double>::digits))
+	{
+		const double unit = std::ldexp(1.0, -static_cast<int>(P::fraction_bits));
+		EXPECT_EQ(largest, P{1.0 - unit});
+		EXPECT_EQ(largest, P{1.0 - unit / 2});
+		EXPECT_EQ(largest, P{1.0 - unit / 4});
+		EXPECT_EQ(largest, P{1.0 - unit * 1.25});
+		EXPECT_EQ(P::from_raw_value(static_cast<typename P::base_type>(largest.raw_value() - 1)), P{1.0 - unit * 1.75});
+	}
 
 #ifndef NDEBUG
 	EXPECT_DEATH(auto v = P{1.0}, "");
@@ -317,7 +330,7 @@ namespace
 					? std::floor(expected_fraction / step + 0.5L) * step
 					: std::floor(expected_fraction / step) * step;
 				if(expected >= 1)
-					expected -= 1; // wraps around
+					expected = 1 - step; // the largest fraction
 			}
 			ASSERT_EQ(expected, exact(P{Q::from_raw_value(raw)})) << "raw " << static_cast<long double>(raw);
 		}

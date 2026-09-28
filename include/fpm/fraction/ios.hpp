@@ -21,7 +21,7 @@
 #include "../detail/charconv.hpp"
 #include "charconv.hpp"
 #include "format.hpp"
-#include "fraction.hpp"
+#include "../fraction.hpp"
 
 // Stream operators for fractions. This header also provides the `std::format` support of <fpm/fraction/format.hpp>,
 // which can be included on its own to avoid the dependency on streams and locales.

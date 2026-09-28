@@ -308,6 +308,7 @@ TYPED_TEST(fraction_format, input)
 	expect("0.5 0.25", P{0.5}, "");
 	expect("0.5abc", P{0.5}, "abc");
 	expect("0.5.25", P{0.5}, ".25");
+	expect("0.9999999999999999999999999999999999999999", last); // not rounded up to 1
 
 	expect_out_of_range("1", last);
 	expect_out_of_range("1.0", last);
@@ -316,7 +317,6 @@ TYPED_TEST(fraction_format, input)
 	expect_out_of_range("1e100", last);
 	expect_out_of_range("0.5e1", last);
 	expect_out_of_range("0x1p0", last);
-	expect_out_of_range("0.9999999999999999999999999999999999999999", last); // rounds up to 1
 	expect_out_of_range("-0.25", P{});
 	expect_out_of_range("-1", P{});
 	expect_out_of_range("-1e-100", P{});

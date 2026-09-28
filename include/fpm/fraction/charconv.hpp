@@ -10,7 +10,7 @@
 #include <system_error>
 
 #include "../detail/charconv.hpp"
-#include "fraction.hpp"
+#include "../fraction.hpp"
 
 // Locale-independent, exact and `constexpr` conversions between fractions and character sequences,
 // mirroring `std::to_chars`, `std::from_chars` and (C++26) `std::to_string` for floating-point types.
@@ -19,9 +19,10 @@
 //
 // Differences from the floating-point versions, because a fraction is a number in [0, 1):
 // - `from_chars` reports `std::errc::result_out_of_range` for every number that is not in [0, 1): negative
-//   numbers, numbers of at least 1 (also those that round up to 1), and "inf", "infinity" and "nan".
+//   numbers, numbers of at least 1, and "inf", "infinity" and "nan".
 //   Text is not an operation of the type: it does not wrap around.
-// - Ties are rounded to even (like `std::from_chars`).
+// - Numbers are rounded to the nearest fraction, ties to even (like `std::from_chars`). That is never 1:
+//   numbers above the largest fraction give the largest fraction.
 
 namespace fpm
 {
@@ -94,13 +95,9 @@ namespace fpm
 		template<typename B>
 		[[nodiscard]] constexpr conversion<B> finish(const B value, const bool half, const bool rest) noexcept
 		{
-			if(half && (rest || (value & 1) != 0))
-			{
-				// The largest value would round up to 1
-				if(value == std::numeric_limits<B>::max())
-					return {0, true};
+			// The largest fraction is not rounded up: to 1
+			if(half && (rest || (value & 1) != 0) && value != std::numeric_limits<B>::max())
 				return {static_cast<B>(value + 1), false};
-			}
 			return {value, false};
 		}
 
@@ -498,7 +495,7 @@ namespace fpm
 	/// no leading whitespace or '+', an optional '-', and no "0x" prefix for `hex`.
 	/// The exponent is forbidden for `fixed`, optional for `general` and `hex`, and required for `scientific`.
 	///
-	/// The result is exact, rounded to nearest (ties to even).
+	/// The result is exact, rounded to the nearest fraction (ties to even): the largest one for numbers above it.
 	/// Numbers that are not in [0, 1), as well as infinity and NaN, give `std::errc::result_out_of_range`.
 	/// On any error, `value` is left unmodified.
 	template<typename B>

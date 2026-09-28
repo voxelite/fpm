@@ -135,6 +135,12 @@ namespace
 		const std::string_view text = "1.0";
 		return fpm::from_chars(text.data(), text.data() + text.size(), value).ec == std::errc::result_out_of_range;
 	}());
+	static_assert([]
+	{
+		fpm::fraction<uint8_t> value{};
+		const std::string_view text = "0.999";
+		return fpm::from_chars(text.data(), text.data() + text.size(), value).ec == std::errc{} && value.raw_value() == 255;
+	}());
 }
 
 TYPED_TEST(fraction_charconv, examples)
@@ -242,10 +248,6 @@ TYPED_TEST(fraction_charconv, out_of_range)
 	EXPECT_TRUE(out_of_range<P>("0.8p1", std::chars_format::hex));
 	EXPECT_TRUE(out_of_range<P>("1p100", std::chars_format::hex));
 
-	// Rounds up to 1
-	EXPECT_TRUE(out_of_range<P>("0.99999999999999999999999999999999999999"));
-	EXPECT_TRUE(out_of_range<P>("0.ffffffffffffffffffffffff", std::chars_format::hex));
-
 	// Negative
 	EXPECT_TRUE(out_of_range<P>("-0.25"));
 	EXPECT_TRUE(out_of_range<P>("-1"));
@@ -259,6 +261,27 @@ TYPED_TEST(fraction_charconv, out_of_range)
 	EXPECT_TRUE(out_of_range<P>("INFINITY"));
 	EXPECT_TRUE(out_of_range<P>("nan"));
 	EXPECT_TRUE(out_of_range<P>("NaN(abc)"));
+}
+
+// Numbers above the largest fraction are in [0, 1): they give the largest fraction, not 1
+TYPED_TEST(fraction_charconv, largest)
+{
+	using P = TypeParam;
+	const auto largest = P::from_raw_value(std::numeric_limits<typename P::base_type>::max());
+
+	EXPECT_TRUE(parses_as("0.99999999999999999999999999999999999999", largest));
+	EXPECT_TRUE(parses_as("0." + std::string(500, '9'), largest));
+	EXPECT_TRUE(parses_as("9.9999999999999999999999999999999999999e-1", largest));
+	EXPECT_TRUE(parses_as("0.ffffffffffffffffffffffff", largest, std::chars_format::hex));
+	EXPECT_TRUE(parses_as("f.fffffffffffffffffffffffp-4", largest, std::chars_format::hex));
+	EXPECT_TRUE(parses_as(to_chars_string(largest), largest));
+	EXPECT_TRUE(parses_as(to_chars_string(largest, std::chars_format::fixed, 80), largest));
+
+	// 1 is not
+	EXPECT_TRUE(out_of_range<P>("1"));
+	EXPECT_TRUE(out_of_range<P>("1.000000000000000000000000000000000000000000000000000000000000000000000000000000"));
+	EXPECT_TRUE(out_of_range<P>("1.000000000000000000000000000000000000000000000000000000000000000000000000000001"));
+	EXPECT_TRUE(out_of_range<P>("1p0", std::chars_format::hex));
 }
 
 TYPED_TEST(fraction_charconv, round_trip)
@@ -363,10 +386,11 @@ TYPED_TEST(fraction_charconv, rounds_to_nearest_even)
 		ASSERT_TRUE(parses_as(below + "9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999", x));
 	}
 
-	// The midpoint below 1
+	// The midpoint below 1, and beyond: the largest fraction
 	const auto last = P::from_raw_value(std::numeric_limits<B>::max());
 	const auto midpoint = exact_decimal((static_cast<unsigned __int128>(last.raw_value()) << 1) | 1, bits + 1);
-	EXPECT_TRUE(out_of_range<P>(midpoint));
+	EXPECT_TRUE(parses_as(midpoint, last));
+	EXPECT_TRUE(parses_as(midpoint + "1", last));
 	auto below = midpoint;
 	below.back() = '4';
 	EXPECT_TRUE(parses_as(below, last));
@@ -488,7 +512,7 @@ namespace
 			const auto reference = fpm::from_chars(digits.data(), digits.data() + digits.size(), expected);
 			ASSERT_EQ(std::errc{}, reference.ec) << digits;
 			if(expected == Q{1})
-				ASSERT_TRUE(out_of_range<P>(digits)) << digits; // rounds up to 1
+				ASSERT_TRUE(parses_as(digits, P::from_raw_value(std::numeric_limits<B>::max()))) << digits; // not rounded up to 1
 			else
 				ASSERT_TRUE(parses_as(digits, P{expected})) << digits;
 		}

@@ -7,12 +7,12 @@ A C++ header-only fixed-point math library. "fpm" stands for "fixed-point math".
 It is designed to serve as a drop-in replacement for floating-point types and aims to provide as much of the standard library's functionality as possible with exclusively integers. `fpm` requires C++26.
 
 ## Headers
-Every type has its own directory, with the same headers where they apply:
+Every type has its own header, and a directory of that name with the headers for what can be added to it:
 
 | | `fpm::fixed` | `fpm::fraction` |
 |---|---|---|
-| The type | `<fpm/fixed/fixed.hpp>` | `<fpm/fraction/fraction.hpp>` |
-| Mathematical functions | `<fpm/fixed/math.hpp>` | |
+| The type | `<fpm/fixed.hpp>` | `<fpm/fraction.hpp>` |
+| Mathematical functions | `<fpm/fixed/math.hpp>` | `<fpm/fraction/math.hpp>` (trigonometry) |
 | `to_chars`, `from_chars`, `to_string` | `<fpm/fixed/charconv.hpp>` | `<fpm/fraction/charconv.hpp>` |
 | `std::format` | `<fpm/fixed/format.hpp>` | `<fpm/fraction/format.hpp>` |
 | Stream operators | `<fpm/fixed/ios.hpp>` | `<fpm/fraction/ios.hpp>` |
@@ -35,7 +35,7 @@ for signed integer types.
 
 To use this class, simply include its header:
 ```c++
-#include <fpm/fixed/fixed.hpp>
+#include <fpm/fixed.hpp>
 ```
 You may wish to typedef a particular choice of underlying type, intermediate type and fraction bitcount, e.g.:
 ```c++
@@ -59,10 +59,10 @@ The 64-bit types use `__int128` (GCC, Clang) or `std::_Signed128` (MSVC and clan
 128-bit type, or `FPM_NO_INT128` to not use 128-bit integers at all. Without a 128-bit type, as on most 32-bit targets, the 64-bit types are not available.
 
 ## Fractions
-A `fpm::fixed` type cannot use all its bits for the fraction. For values in [0, 1) that do, the header `<fpm/fraction/fraction.hpp>`
+A `fpm::fixed` type cannot use all its bits for the fraction. For values in [0, 1) that do, the header `<fpm/fraction.hpp>`
 provides `fpm::fraction`, templated on the unsigned integer type that stores it:
 ```c++
-#include <fpm/fraction/fraction.hpp>
+#include <fpm/fraction.hpp>
 
 using angle = fpm::fraction<std::uint16_t>; // a part of a full turn, in steps of 1/65536
 
@@ -70,17 +70,45 @@ angle a { 0.75 };
 a += angle { 0.5 };                         // wraps around: 0.25
 auto radians = fpm::fixed_16_16(a) * fpm::fixed_16_16::two_pi();
 ```
-It is meant to store such values, not to calculate with them: it has no mathematical functions.
+It is meant to store such values, not to calculate with them.
 * A fraction wraps around (modulo 1) instead of overflowing, for all its operations.
 * It supports `+`, `-` and negation, `*` and `/` by an integer, and comparisons (of the values in [0, 1)).
 * It converts explicitly to and from floating-point types and `fpm::fixed` types. The conversion from a fixed-point number takes its fraction
   (so -0.25 becomes 0.75); the conversion from a floating-point number requires a number in [0, 1).
+* A number that is converted to a fraction (also from text) is rounded to the nearest fraction. That is never 1:
+  numbers above the largest fraction, like 0.9999 for 8 bits, give the largest fraction.
 * For anything else, convert it to a `fpm::fixed` type (with parentheses, as in the example).
 
+### Angles
+The header `<fpm/fraction/math.hpp>` provides the trigonometry for angles that are stored as a fraction of a turn (so 1/4 is a right angle).
+The functions have the names of the ones for fixed-point numbers, which use radians. The type of the result is their first template argument:
+```c++
+#include <fpm/fraction/math.hpp>
+
+using angle = fpm::fraction<std::uint16_t>;
+using number = fpm::fixed_16_16;
+
+angle rotation { 0.125 };                          // 45 degrees
+number x = fpm::cos<number>(rotation);             // the forward vector: 0.7071, 0.7071
+number y = fpm::sin<number>(rotation);
+angle back = fpm::atan2<angle>(y, x);              // 0.125
+```
+* `sin`, `cos` and `tan` take an angle and give a fixed-point number. They are as precise as the ones for that fixed-point type,
+  and `sin` and `cos` are faster: the two highest bits of the angle are its quadrant, which takes a multiplication for radians.
+  `tan` saturates where the result is too large, also for 1/4 and 3/4 of a turn (where it gives the negative of the maximum).
+* `asin`, `acos`, `atan` and `atan2` take fixed-point numbers and give an angle. Negative angles wrap around: `asin` of -0.5 is -1/12 of a turn, which is 0.9167.
+  `atan2` gives the angle of a vector over the whole turn, and 0 for the zero vector.
+* The axes and the diagonals are exact: `sin` of 1/4 is 1, and `atan2` of (1, 1) is 1/8.
+* The angles are within about 0.52 units of the fraction, if it has at least 4 bits fewer than the base type of the numbers: a 16-bit fraction for 32-bit numbers.
+  (Numbers with a narrower base type are calculated with 32 bits.) With more bits the angle is as precise as that calculation,
+  so a 64-bit fraction from 32-bit numbers has about 30 bits that are right.
+* An angle with more bits than the calculation of the result uses is rounded first: this is below the precision of the result.
+
+### Text
 Fractions have their own conversions to and from text, which behave like the ones for `fpm::fixed`:
 `fpm::to_chars`, `fpm::from_chars` and `fpm::to_string` in `<fpm/fraction/charconv.hpp>`, `std::format` support in `<fpm/fraction/format.hpp>`,
 and the stream operators in `<fpm/fraction/ios.hpp>`.
-* Text does not wrap around: a number that is not in [0, 1) is out of range. That includes negative numbers, 1, and numbers that round up to 1.
+* Text does not wrap around: a number that is not in [0, 1) is out of range. That includes negative numbers and 1.
   `from_chars` reports `std::errc::result_out_of_range` and leaves the value unmodified;
   a stream stores the nearest value (0 or the largest fraction) and sets its `failbit`.
 * Digits are rounded when a precision is given, so a fraction close to 1 can be printed as `1.00`.
@@ -117,7 +145,7 @@ Notes:
 * to trade precision for speed and code size, convert to a type with fewer fraction bits (or a 32-bit base type) before calling a function.
 
 ## Specialized customization points
-The header `<fpm/fixed/fixed.hpp>` provides specializations for `fpm::fixed` for the following types:
+The header `<fpm/fixed.hpp>` provides specializations for `fpm::fixed` for the following types:
 * `std::hash`
 * `std::numeric_limits`. Like for floating-point types, `min()` is the smallest positive value and `lowest()` the most negative one.
 
@@ -155,7 +183,7 @@ The `<fpm/fixed/ios.hpp>` header provides streaming operators. Simply stream an 
 
 For instance, the following program prints `"===3.142e+02"`:
 ```c++
-#include <fpm/fixed/fixed.hpp>
+#include <fpm/fixed.hpp>
 #include <fpm/fixed/ios.hpp>
 #include <iostream>
 #include <iomanip>

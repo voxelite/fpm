@@ -14,7 +14,7 @@
 
 #include "../detail/charconv.hpp"
 #include "charconv.hpp"
-#include "fixed.hpp"
+#include "../fixed.hpp"
 
 // `std::format` support for fixed-point numbers. Independent of streams and locales: see <fpm/fixed/ios.hpp> for those.
 

@@ -212,6 +212,52 @@ TYPED_TEST(math_types, sin_cos_tan)
 	EXPECT_EQ(P(0), tan(P(0)));
 }
 
+// The values closest to π/2: the cosine is below the precision of the evaluation (it used to be a division by zero)
+TEST(math, tan_at_pole)
+{
+	using P = fpm::fixed<int32_t, int64_t, 30>;
+	const auto max = std::numeric_limits<P>::max();
+	EXPECT_EQ(max, tan(P::from_raw_value(1686629712)));
+	EXPECT_EQ(max, tan(P::from_raw_value(1686629713))); // π/2 - 6e-11
+	EXPECT_EQ(-max, tan(P::from_raw_value(1686629714)));
+	EXPECT_EQ(-max, tan(P::from_raw_value(-1686629713)));
+
+	// Around every pole that a type can reach: saturated, with the sign of the tangent
+	const auto check = []<typename Q>()
+	{
+		using B = typename Q::base_type;
+		// (Not from <numbers>: libc++ has the constants with the precision of a `double` only)
+		const long double half_pi = 1.570796326794896619231321691639751442L;
+		const long double largest = ld(std::numeric_limits<Q>::max());
+		for(int pole = -41; pole <= 41; pole += 2)
+		{
+			const long double position = std::ldexp(pole * half_pi, static_cast<int>(Q::fraction_bits));
+			if(std::abs(position) >= static_cast<long double>(std::numeric_limits<B>::max()) - 8)
+				continue;
+			for(int offset = -3; offset <= 3; ++offset)
+			{
+				const auto x = Q::from_raw_value(static_cast<B>(static_cast<B>(std::floor(position)) + offset));
+				const long double expected = std::tan(ld(x));
+				const long double result = ld(tan(x));
+				if(std::abs(expected) >= largest)
+					ASSERT_TRUE(std::abs(result) >= largest - eps<Q> && (result < 0) == (expected < 0)) << "tan(" << ld(x) << ") is " << result;
+			}
+		}
+	};
+	check.template operator()<fpm::fixed_4_4>();
+	check.template operator()<fpm::fixed_8_8>();
+	check.template operator()<fpm::fixed_16_16>();
+	check.template operator()<fpm::fixed_8_24>();
+	check.template operator()<fpm::fixed<int32_t, int64_t, 28>>();
+	check.template operator()<fpm::fixed<int32_t, int64_t, 29>>();
+	check.template operator()<P>();
+#ifdef FPM_INT128
+	check.template operator()<fpm::fixed_32_32>();
+	check.template operator()<fpm::fixed_8_56>();
+	check.template operator()<fpm::fixed<int64_t, FPM_INT128, 62>>();
+#endif
+}
+
 TYPED_TEST(math_types, inverse_trigonometry)
 {
 	using P = TypeParam;

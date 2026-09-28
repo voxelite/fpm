@@ -15,13 +15,13 @@ If any of these reasons apply for you, and your problem domain has a clearly out
 then fixed-point numbers might be a solution for you.
 
 ## Quick Start
-To use `fpm`, include its header `<fpm/fixed/fixed.hpp>` and use the `fpm::fixed_16_16`, `fpm::fixed_24_8` or `fpm::fixed_8_24`
+To use `fpm`, include its header `<fpm/fixed.hpp>` and use the `fpm::fixed_16_16`, `fpm::fixed_24_8` or `fpm::fixed_8_24`
 types as if they were native floating-pointer types:
 ```c++
-#include <fpm/fixed/fixed.hpp>  // For fpm::fixed_16_16
-#include <fpm/fixed/math.hpp>   // For fpm::cos
-#include <fpm/fixed/ios.hpp>    // For fpm::operator<< and fpm::operator>>
-#include <iostream>             // For std::cin, std::cout
+#include <fpm/fixed.hpp>       // For fpm::fixed_16_16
+#include <fpm/fixed/math.hpp>  // For fpm::cos
+#include <fpm/fixed/ios.hpp>   // For fpm::operator<< and fpm::operator>>
+#include <iostream>            // For std::cin, std::cout
 
 int main()
 {
@@ -36,8 +36,9 @@ int main()
 To use the fixed-point equivalents of the `<math.h>` functions such as `sqrt`, `sin` and `log`, include the header `<fpm/fixed/math.hpp>`.
 To stream fixed-point values to or from streams, include the header `<fpm/fixed/ios.hpp>`.
 To use them with `std::format` (without the dependency on streams), include the header `<fpm/fixed/format.hpp>`.
-To store values in [0, 1) that wrap around, like an angle as a part of a full turn, include the header `<fpm/fraction/fraction.hpp>`.
-Its conversions to and from text are in `<fpm/fraction/charconv.hpp>`, `<fpm/fraction/format.hpp>` and `<fpm/fraction/ios.hpp>`.
+To store values in [0, 1) that wrap around, like an angle as a part of a full turn, include the header `<fpm/fraction.hpp>`.
+Its trigonometry (for angles) is in `<fpm/fraction/math.hpp>`, and its conversions to and from text are in `<fpm/fraction/charconv.hpp>`,
+`<fpm/fraction/format.hpp>` and `<fpm/fraction/ios.hpp>`.
 For locale-independent, exact and `constexpr` conversions to and from text (`fpm::to_chars`, `fpm::from_chars` and `fpm::to_string`), include `<fpm/fixed/charconv.hpp>`.
 
 ## Documentation

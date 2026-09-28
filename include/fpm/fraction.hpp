@@ -7,7 +7,7 @@
 #include <limits>
 #include <type_traits>
 
-#include "../fixed/fixed.hpp"
+#include "fixed.hpp"
 
 namespace fpm
 {
@@ -16,6 +16,9 @@ namespace fpm
 	//!
 	//! This type only stores such values, with the operations that are meaningful modulo 1.
 	//! For any other calculation, convert it to a `fpm::fixed` type (which can represent 1).
+	//!
+	//! Conversions of a number to a fraction round to the nearest fraction. That is never 1:
+	//! numbers above the largest fraction give the largest fraction.
 	//! \tparam BaseType the unsigned integer type used to store the fraction
 	template<std::unsigned_integral BaseType>
 	struct fraction
@@ -35,16 +38,15 @@ namespace fpm
 	public:
 		inline constexpr fraction() noexcept = default;
 
-		/// Converts a floating-point number in [0, 1), rounded to nearest.
-		/// A number that rounds up to 1 wraps around to 0.
+		/// Converts a floating-point number in [0, 1), rounded to the nearest fraction
 		template<std::floating_point T>
 		inline constexpr explicit fraction(const T val) noexcept
 			: m_value(floating_to_raw(val))
 		{}
 
 		/// The fraction of a fixed-point number: val - floor(val), so -0.25 gives 0.75.
-		/// Fraction bits that don't fit are rounded to nearest if the fixed-point type uses rounding (a number
-		/// that rounds up to 1 wraps around to 0), and dropped otherwise.
+		/// Fraction bits that don't fit are rounded to the nearest fraction if the fixed-point type uses rounding,
+		/// and dropped otherwise.
 		template<typename B, typename I, uint32_t F, bool R>
 		inline constexpr explicit fraction(const fixed<B, I, F, R> val) noexcept
 			: m_value(fixed_to_raw<F, R>(val.raw_value()))
@@ -153,6 +155,9 @@ namespace fpm
 			const T scaled = val * half_scale<T>();
 			const auto high = static_cast<BaseType>(scaled); // truncated
 			const auto low = static_cast<BaseType>((scaled - static_cast<T>(high)) * T{2} + T{0.5}); // 0, 1 or 2
+			constexpr BaseType largest = std::numeric_limits<BaseType>::max();
+			if(low == 2 && high == largest / 2) [[unlikely]]
+				return largest; // would round up to 1
 			return static_cast<BaseType>(static_cast<U>(high) * 2 + low);
 		}
 
@@ -170,10 +175,15 @@ namespace fpm
 			{
 				constexpr uint32_t shift = F - fraction_bits;
 				// The shift of the raw value itself rounds towards negative infinity for negative values
+				auto result = static_cast<BaseType>(static_cast<U>(raw >> shift));
 				if constexpr(R)
-					return static_cast<BaseType>(static_cast<U>(static_cast<U>(raw >> (shift - 1)) + 1) >> 1);
-				else
-					return static_cast<BaseType>(static_cast<U>(raw >> shift));
+				{
+					// Up for the bit below, unless that would round up to 1
+					const bool half = ((raw >> (shift - 1)) & 1) != 0;
+					if(half && result != std::numeric_limits<BaseType>::max())
+						++result;
+				}
+				return result;
 			}
 		}
 
@@ -216,4 +226,20 @@ namespace fpm
 	{
 		return x /= y;
 	}
+
+#pragma region Type testing
+
+	template<typename T>
+	struct is_fraction : std::false_type {};
+
+	template<typename BaseType>
+	struct is_fraction<fraction<BaseType>> : std::true_type {};
+
+	template<typename T>
+	inline constexpr bool is_fraction_v = is_fraction<T>::value;
+
+	template<typename T>
+	concept Fraction = is_fraction_v<T>;
+
+#pragma endregion
 }

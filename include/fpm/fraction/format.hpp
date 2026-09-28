@@ -14,7 +14,7 @@
 
 #include "../detail/charconv.hpp"
 #include "charconv.hpp"
-#include "fraction.hpp"
+#include "../fraction.hpp"
 
 // `std::format` support for fractions. Independent of streams and locales: see <fpm/fraction/ios.hpp> for those.
 

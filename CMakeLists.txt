@@ -40,6 +40,7 @@ if(FPM_BUILD_TESTS)
     tests/fraction.cpp
     tests/fraction_charconv.cpp
     tests/fraction_format.cpp
+    tests/fraction_math.cpp
     tests/from.cpp
     tests/input.cpp
     tests/int128.cpp

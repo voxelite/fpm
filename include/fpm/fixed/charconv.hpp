@@ -11,7 +11,7 @@
 #include <type_traits>
 
 #include "../detail/charconv.hpp"
-#include "fixed.hpp"
+#include "../fixed.hpp"
 
 // Locale-independent, exact and `constexpr` conversions between fixed-point numbers and character sequences,
 // mirroring `std::to_chars`, `std::from_chars` and (C++26) `std::to_string` for floating-point types.

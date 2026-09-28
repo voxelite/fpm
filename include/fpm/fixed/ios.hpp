@@ -20,7 +20,7 @@
 
 #include "../detail/charconv.hpp"
 #include "charconv.hpp"
-#include "fixed.hpp"
+#include "../fixed.hpp"
 #include "format.hpp"
 
 // Stream operators for fixed-point numbers. This header also provides the `std::format` support of <fpm/fixed/format.hpp>,

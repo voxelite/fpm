@@ -6,7 +6,7 @@
 #include <cmath>
 #include <utility>
 
-#include "fixed.hpp"
+#include "../fixed.hpp"
 #include "detail/polynomials.hpp"
 
 namespace fpm
@@ -989,42 +989,56 @@ namespace fpm
 		return detail::sin_quarter_turns<B, I, F, R>(quadrant + 1, position);
 	}
 
+	namespace detail
+	{
+		/// tan of an angle in quarter turns (not exactly an odd number of them), rounded to QF.
+		/// Results too large to represent saturate to the maximum.
+		template<typename B, typename I, uint32_t F, bool R>
+		[[nodiscard]] inline constexpr fixed<B, I, F, R> tan_quarter_turns(const int32_t quadrant, const signed_intermediate<I> position) noexcept
+		{
+			using Fixed = fixed<B, I, F, R>;
+			using S = std::make_signed_t<B>;
+			using SI = signed_intermediate<I>;
+			constexpr int32_t M = poly_bits<B, 1>;
+			constexpr int32_t Z = quarter_turn_bits<B, I, F>;
+
+			// tan = sin(u) / cos(u) = sin(u) / sin(1 - u) in quarter turns. In the odd quadrants, -cos(u) / sin(u).
+			// The result has up to all the bits of the type, so the polynomials are as precise as the evaluation allows.
+			const bool odd = (quadrant & 1) != 0;
+			const SI numerator = odd ? (SI{1} << Z) - position : position;
+			const SI denominator = (SI{1} << Z) - numerator;
+
+			// Tangent goes to infinity at 90 and -90 degrees.
+			// We can't represent that with fixed-point maths.
+			assert(denominator > 0);
+
+			const S sine = sin_first_quadrant<B, I, M + 1>(static_cast<S>(shift_by<M - Z>(numerator)));
+
+			// Where the tangent is large, the cosine is small: calculated with k more fraction bits, as far as the division allows
+			// (sine << (F + k) must fit) and as the reduced angle has them. sin(v) = v Q(v^2) for the denominator's angle v.
+			constexpr int32_t k_max = std::min<int32_t>(value_bits<SI> - 1 - M - static_cast<int32_t>(F), Z - M);
+			const int32_t k = std::clamp<int32_t>(Z - 1 - find_highest_bit(denominator), 0, k_max);
+			const auto v = static_cast<S>(denominator >> (Z - M - k)); // Q(M+k), below 2^M
+			const auto v_m = static_cast<S>(v >> k);
+			const S cosine = poly_multiply<I, M, S>(v, sin_quotient<B, I, M + 1>(poly_multiply<I, M, S>(v_m, v_m)));
+
+			// |tan| = sine / cosine in QF, rounded to nearest, saturated to the maximum.
+			// A cosine of 0 is one below the precision of the evaluation: then the tangent is beyond the maximum.
+			constexpr auto max = std::numeric_limits<Fixed>::max();
+			if(cosine == 0) [[unlikely]]
+				return Fixed::from_raw_value(odd ? static_cast<B>(B{0} - max.raw_value()) : max.raw_value());
+			const SI magnitude = ((static_cast<SI>(sine) << (static_cast<int32_t>(F) + k)) + cosine / 2) / cosine;
+			const B result = magnitude > static_cast<SI>(max.raw_value()) ? max.raw_value() : static_cast<B>(magnitude);
+			// (Negated via the raw value, so this compiles for unsigned base types as well)
+			return Fixed::from_raw_value(odd ? static_cast<B>(B{0} - result) : result);
+		}
+	}
+
 	template<typename B, typename I, uint32_t F, bool R>
 	[[nodiscard]] inline constexpr fixed<B, I, F, R> tan(fixed<B, I, F, R> x) noexcept
 	{
-		using Fixed = fixed<B, I, F, R>;
-		using S = std::make_signed_t<B>;
-		using SI = detail::signed_intermediate<I>;
-		constexpr int32_t M = detail::poly_bits<B, 1>;
-		constexpr int32_t Z = detail::quarter_turn_bits<B, I, F>;
-
-		// tan = sin(u) / cos(u) = sin(u) / sin(1 - u) in quarter turns. In the odd quadrants, -cos(u) / sin(u).
-		// The result has up to all the bits of the type, so the polynomials are as precise as the evaluation allows.
 		const auto [quadrant, position] = detail::quarter_turns(x);
-		const bool odd = (quadrant & 1) != 0;
-		const SI numerator = odd ? (SI{1} << Z) - position : position;
-		const SI denominator = (SI{1} << Z) - numerator;
-
-		// Tangent goes to infinity at 90 and -90 degrees.
-		// We can't represent that with fixed-point maths.
-		assert(denominator > 0);
-
-		const S sine = detail::sin_first_quadrant<B, I, M + 1>(static_cast<S>(detail::shift_by<M - Z>(numerator)));
-
-		// Where the tangent is large, the cosine is small: calculated with k more fraction bits, as far as the division allows
-		// (sine << (F + k) must fit) and as the reduced angle has them. sin(v) = v Q(v^2) for the denominator's angle v.
-		constexpr int32_t k_max = std::min<int32_t>(detail::value_bits<SI> - 1 - M - static_cast<int32_t>(F), Z - M);
-		const int32_t k = std::clamp<int32_t>(Z - 1 - detail::find_highest_bit(denominator), 0, k_max);
-		const auto v = static_cast<S>(denominator >> (Z - M - k)); // Q(M+k), below 2^M
-		const auto v_m = static_cast<S>(v >> k);
-		const S cosine = detail::poly_multiply<I, M, S>(v, detail::sin_quotient<B, I, M + 1>(detail::poly_multiply<I, M, S>(v_m, v_m)));
-
-		// |tan| = sine / cosine in QF, rounded to nearest, saturated to the maximum
-		const SI magnitude = ((static_cast<SI>(sine) << (static_cast<int32_t>(F) + k)) + cosine / 2) / cosine;
-		constexpr auto max = std::numeric_limits<Fixed>::max();
-		const B result = magnitude > static_cast<SI>(max.raw_value()) ? max.raw_value() : static_cast<B>(magnitude);
-		// (Negated via the raw value, so this compiles for unsigned base types as well)
-		return Fixed::from_raw_value(odd ? static_cast<B>(B{0} - result) : result);
+		return detail::tan_quarter_turns<B, I, F, R>(quadrant, position);
 	}
 
 	namespace detail
@@ -1072,20 +1086,21 @@ namespace fpm
 			return fixed<B, I, F, R>::from_raw_value(static_cast<B>(round_shift<poly_bits<B, 1> - static_cast<int32_t>(F)>(angle)));
 		}
 
-		/// asin(x) in QM (in the intermediate type)
-		template<typename B, typename I, uint32_t F, bool R>
+		/// asin(x) in QM (in the intermediate type), for a result with `Precision` fraction bits (at least F)
+		template<uint32_t Precision, typename B, typename I, uint32_t F, bool R>
 		[[nodiscard]] inline constexpr I asin_angle(const fixed<B, I, F, R> x) noexcept
 		{
+			static_assert(Precision >= F);
 			constexpr int32_t M = poly_bits<B, 1>;
 
 			// asin(x) = atan(x / sqrt(1 - x^2)). The raw value of 1 - x^2 in Q(2F) is exactly 2^(2F) - X^2 for the raw value X.
-			// Its square root is rounded to K = F + 8 fraction bits: its error passes on to the angle about one to one,
+			// Its square root is rounded to K = Precision + 8 fraction bits: its error passes on to the angle about one to one,
 			// so this adds at most 1/512 unit to the result. Fewer bits than M make the root faster: it takes K + 1 steps.
-			constexpr int32_t K = std::min<int32_t>(static_cast<int32_t>(F) + 8, M);
+			constexpr int32_t K = std::min<int32_t>(static_cast<int32_t>(Precision) + 8, M);
 			using SI = signed_intermediate<I>;
 			const I a = magnitude<B, I>(x.raw_value());
 			const auto root = static_cast<I>(sqrt_steps<K + 1>(shift_by<2 * (K - static_cast<int32_t>(F))>(static_cast<SI>((SI{1} << (2 * F)) - static_cast<SI>(a * a)))));
-			const I angle = atan_ratio<B, I, F>(shift_by<K - static_cast<int32_t>(F)>(a), root);
+			const I angle = atan_ratio<B, I, Precision>(shift_by<K - static_cast<int32_t>(F)>(a), root);
 			return is_negative(x.raw_value()) ? static_cast<I>(-angle) : angle;
 		}
 	}
@@ -1116,7 +1131,7 @@ namespace fpm
 		assert(x <= Fixed(+1));
 		if constexpr(std::is_signed_v<B>)
 			assert(x >= Fixed(-1));
-		return detail::angle_to_fixed<B, I, F, R>(detail::asin_angle(x));
+		return detail::angle_to_fixed<B, I, F, R>(detail::asin_angle<F>(x));
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
@@ -1129,7 +1144,7 @@ namespace fpm
 
 		// acos(x) = π/2 - asin(x): asin's absolute error is so small that this is precise even where acos(x) is small
 		constexpr I half_pi = detail::round_constant<I>(detail::half_pi_q62, 62, detail::poly_bits<B, 1>);
-		return detail::angle_to_fixed<B, I, F, R>(static_cast<I>(half_pi - detail::asin_angle(x)));
+		return detail::angle_to_fixed<B, I, F, R>(static_cast<I>(half_pi - detail::asin_angle<F>(x)));
 	}
 
 	template<typename B, typename I, uint32_t F, bool R>
