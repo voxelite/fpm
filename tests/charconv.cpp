@@ -603,14 +603,15 @@ namespace
 
 			P value{};
 			const auto parsed = fpm::from_chars(text.data(), text.data() + text.size(), value);
-			ASSERT_EQ(parsed.ec, std::errc{}) << text;
-			ASSERT_EQ(expected, static_cast<int64_t>(value.raw_value())) << text;
+			const auto input = [&] { return std::format("{} (the raw value {} with {} fraction bits, iteration {})", text, fine_raw, F + 8, i); };
+			ASSERT_EQ(parsed.ec, std::errc{}) << input();
+			ASSERT_EQ(expected, static_cast<int64_t>(value.raw_value())) << input();
 
 			// The stream operator uses the same conversion
 			std::istringstream ss{std::string(text)};
 			P streamed{};
 			ss >> streamed;
-			ASSERT_EQ(value, streamed) << text;
+			ASSERT_EQ(value, streamed) << input();
 		}
 	}
 }
