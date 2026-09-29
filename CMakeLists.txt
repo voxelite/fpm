@@ -24,6 +24,14 @@ if(FPM_FRACTION_STRICT)
   target_compile_definitions(fpm INTERFACE FPM_FRACTION_STRICT)
 endif()
 
+# The conversions of a floating-point type with a small range (like std::float16_t) are calculated in `float`, which
+# represents its numbers exactly. This option calculates them in the type itself instead: the same results, but several
+# times slower where the processor has no arithmetic for the type (most of x86).
+option(FPM_NO_FLOATING_WIDENING "Convert floating-point types with a small range (like std::float16_t) in the type itself, not in float" OFF)
+if(FPM_NO_FLOATING_WIDENING)
+  target_compile_definitions(fpm INTERFACE FPM_NO_FLOATING_WIDENING)
+endif()
+
 # Results that fpm::fixed cannot represent are not defined, like the overflow of integers. These options change that,
 # for all the targets that use fpm, so they agree:
 # - FPM_DEFINED_OVERFLOW defines them, which costs some speed in the mathematical functions;
@@ -62,6 +70,7 @@ if(FPM_BUILD_TESTS)
     tests/classification.cpp
     tests/customizations.cpp
     tests/detail.cpp
+    tests/floating_types.cpp
     tests/formatting.cpp
     tests/formatting_wchar.cpp
     tests/fraction.cpp

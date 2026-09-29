@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bit>
 #include <cassert>
 #include <compare>
 #include <concepts>
@@ -33,6 +34,11 @@
 //   optimization level. It costs some speed in the mathematical functions.
 // - FPM_CHECK_OVERFLOW makes such a result of an operator an error, which `assert` reports (so in builds with
 //   assertions, and in constant expressions).
+
+// The conversions of a floating-point type with a small range (like std::float16_t, which cannot represent 2^16) are
+// calculated in `float`, which represents every number of such a type exactly. Define FPM_NO_FLOATING_WIDENING to
+// calculate them in the type itself instead: the same results, several times slower where the processor has no
+// arithmetic for the type (most of x86, where the compiler converts every operation to `float` and back).
 
 namespace fpm
 {
@@ -150,6 +156,117 @@ namespace fpm
 		[[nodiscard]] inline constexpr uint64_t magnitude_of(const T value) noexcept
 		{
 			return is_negative(value) ? uint64_t{0} - static_cast<uint64_t>(value) : static_cast<uint64_t>(value);
+		}
+
+		/// Whether a floating-point type can calculate the conversions of a type with `bits` bits, `fraction_bits` of which
+		/// are the fraction: it represents 2^bits, and 2^-fraction_bits as a normal number (so the scaling is exact).
+		/// Every type can, except the ones with a small range, like std::float16_t.
+		template<std::floating_point T>
+		[[nodiscard]] inline constexpr bool covers(const int32_t bits, const int32_t fraction_bits) noexcept
+		{
+			return std::numeric_limits<T>::max_exponent > bits && std::numeric_limits<T>::min_exponent - 1 <= -fraction_bits;
+		}
+
+#ifndef FPM_NO_FLOATING_WIDENING
+		// The conversions of a floating-point type with a small range (see `covers`) are calculated in `float`, which
+		// represents every number of such a type exactly (see FPM_NO_FLOATING_WIDENING)
+
+		/// The floating-point type to convert a number of type T in: T itself, or `float` where T cannot (see `covers`)
+		template<std::floating_point T, int32_t Bits, int32_t FractionBits>
+		using calculation_t = std::conditional_t<covers<T>(Bits, FractionBits), T, float>;
+
+		/// 2^exponent as a `float`, for an exponent of a normal number
+		[[nodiscard]] inline constexpr float float_power_of_two(const int32_t exponent) noexcept
+		{
+			static_assert(std::numeric_limits<float>::is_iec559);
+			return std::bit_cast<float>(static_cast<uint32_t>(exponent + 127) << 23);
+		}
+#else
+		/// 2^exponent in a floating-point type, for any exponent: exact where the type represents it (0 below its range,
+		/// infinity beyond it). By squaring, only as far as the exponent needs.
+		template<std::floating_point T>
+		[[nodiscard]] inline constexpr T power_of_two_any(const int32_t exponent) noexcept
+		{
+			T base = (exponent < 0) ? static_cast<T>(0.5) : T{2};
+			uint32_t n = (exponent < 0) ? static_cast<uint32_t>(-exponent) : static_cast<uint32_t>(exponent);
+			T result{1};
+			while(true)
+			{
+				if((n & 1) != 0)
+					result *= base;
+				n >>= 1;
+				if(n == 0)
+					return result;
+				base *= base;
+			}
+		}
+
+		/// floor(value * 2^bits) for a value in [0, 1), and what is left of it in [0, 1): exact, in steps that the
+		/// floating-point type can scale by (for a type with a small range, like std::float16_t, 2^bits may be infinite)
+		template<std::floating_point T>
+		[[nodiscard]] inline constexpr uint64_t fraction_digits(T& value, int32_t bits) noexcept
+		{
+			// 2^chunk is the largest power of two of the type
+			constexpr int32_t chunk = std::numeric_limits<T>::max_exponent - 1;
+			constexpr T chunk_scale = power_of_two<T>(chunk);
+			uint64_t digits = 0;
+			while(bits > 0)
+			{
+				const int32_t step = (bits < chunk) ? bits : chunk;
+				value *= (step == chunk) ? chunk_scale : power_of_two_any<T>(step);
+				const auto digit = static_cast<uint64_t>(value); // truncated: below 2^step
+				value -= static_cast<T>(digit);
+				digits = (step < 64) ? (digits << step) | digit : digit;
+				bits -= step;
+			}
+			return digits;
+		}
+#endif
+
+		/// The nearest number of the floating-point type T to ±magnitude / 2^fraction_bits, for a type that cannot calculate
+		/// it itself (see `covers`). The magnitude is rounded to the precision of T first, also where the result is subnormal
+		/// (ties to even, like the conversions of the language): the rest is exact.
+		template<std::floating_point T>
+		[[nodiscard]] inline constexpr T nearest(uint64_t magnitude, const bool negative, const int32_t fraction_bits) noexcept
+		{
+			using L = std::numeric_limits<T>;
+			static_assert(L::radix == 2);
+#ifndef FPM_NO_FLOATING_WIDENING
+			using F = std::numeric_limits<float>;
+			static_assert(L::digits <= F::digits && L::min_exponent >= F::min_exponent && L::max_exponent <= F::max_exponent,
+				"float must represent every number of the type");
+			using W = float;
+#else
+			using W = T;
+#endif
+			W result = 0;
+			if(magnitude != 0)
+			{
+				// The exponent of the unit of the last digit of the result: of the precision of T, or of its subnormal numbers
+				const int32_t exponent = static_cast<int32_t>(std::bit_width(magnitude)) - 1 - fraction_bits;
+				int32_t unit = ((exponent > L::min_exponent - 1) ? exponent : L::min_exponent - 1) - (L::digits - 1);
+				const int32_t drop = unit + fraction_bits; // bits of the magnitude below that unit
+				uint64_t units = magnitude;
+				if(drop > 0)
+				{
+					const uint64_t rest = (drop < 64) ? magnitude & ((uint64_t{1} << drop) - 1) : magnitude;
+					const uint64_t half = uint64_t{1} << (drop - 1);
+					units = (drop < 64) ? magnitude >> drop : 0;
+					if(rest > half || (rest == half && (units & 1) != 0))
+						++units;
+				}
+				else
+				{
+					unit = -fraction_bits;
+				}
+				// At most 2^digits units, and a power of two that T represents (or infinity for a result beyond the range)
+#ifndef FPM_NO_FLOATING_WIDENING
+				result = static_cast<W>(units) * float_power_of_two(unit);
+#else
+				result = static_cast<W>(units) * power_of_two_any<W>(unit);
+#endif
+			}
+			return static_cast<T>(negative ? -result : result);
 		}
 
 		/// The largest magnitude of the type B, for a negative or a positive value
@@ -326,6 +443,9 @@ namespace fpm
 		/// 2^FractionBits in the base type: the raw value of 1
 		static constexpr BaseType RAW_ONE = static_cast<BaseType>(BaseType(1) << FractionBits);
 
+		/// The bits of the base type (with the sign bit)
+		static constexpr int32_t BITS = std::numeric_limits<std::make_unsigned_t<BaseType>>::digits;
+
 		struct raw_construct_tag{};
 		inline constexpr fixed(const BaseType val, raw_construct_tag) noexcept : m_value(val) {}
 
@@ -343,7 +463,11 @@ namespace fpm
 		/// This truncates bits that don't fit, like the other conversions: a number beyond the range wraps around.
 		template<std::floating_point T>
 		inline constexpr explicit fixed(const T val) noexcept
+#ifndef FPM_NO_FLOATING_WIDENING
+			: m_value(floating_to_raw(static_cast<detail::calculation_t<T, BITS, static_cast<int32_t>(FractionBits)>>(val)))
+#else
 			: m_value(floating_to_raw(val))
+#endif
 		{}
 
 		/// Constructs from another fixed-point type with possibly different underlying representation.
@@ -357,11 +481,14 @@ namespace fpm
 
 #pragma region Conversion Operators
 
-		/// Explicit conversion to a floating-point type
+		/// Explicit conversion to a floating-point type: the nearest number (infinite beyond its range)
 		template<std::floating_point T>
 		[[nodiscard]] inline constexpr explicit operator T() const noexcept
 		{
-			return static_cast<T>(m_value) / static_cast<T>(RAW_ONE);
+			if constexpr(detail::covers<T>(BITS, static_cast<int32_t>(FractionBits)))
+				return static_cast<T>(m_value) / static_cast<T>(RAW_ONE);
+			else
+				return detail::nearest<T>(detail::magnitude_of(m_value), detail::is_negative(m_value), static_cast<int32_t>(FractionBits));
 		}
 
 		/// Explicit conversion to an integral type. Like for floating-point numbers, the fraction is truncated.
@@ -614,6 +741,18 @@ namespace fpm
 		template<std::floating_point T>
 		[[nodiscard]] inline static constexpr BaseType floating_to_raw(const T val) noexcept
 		{
+#ifdef FPM_NO_FLOATING_WIDENING
+			if constexpr(!detail::covers<T>(BITS, static_cast<int32_t>(FractionBits)))
+				return floating_to_raw_small(val);
+			else
+#endif
+				return floating_to_raw_scaled(val);
+		}
+
+		/// Raw value of a floating-point number, for a type that represents the scale (see `detail::covers`)
+		template<std::floating_point T>
+		[[nodiscard]] inline static constexpr BaseType floating_to_raw_scaled(const T val) noexcept
+		{
 			// The conversion of a number beyond the range of the base type is undefined (and not the same for every platform).
 			// The range is checked before the scaling, which is exact but could overflow (and is then not a constant expression).
 			constexpr T limit = detail::power_of_two<T>(std::numeric_limits<BaseType>::digits - static_cast<int32_t>(FractionBits));
@@ -628,15 +767,48 @@ namespace fpm
 					// (In the unsigned type, as the ends of the range wrap around.)
 					using U = std::make_unsigned_t<std::common_type_t<BaseType, unsigned int>>;
 					const T rest = scaled - static_cast<T>(whole);
-					if(rest >= T{0.5})
+					if(rest >= static_cast<T>(0.5))
 						return static_cast<BaseType>(static_cast<U>(whole) + 1u);
-					if(rest <= T{-0.5})
+					if(rest <= static_cast<T>(-0.5))
 						return static_cast<BaseType>(static_cast<U>(whole) - 1u);
 				}
 				return whole;
 			}
 			return floating_to_raw_wrapped(val);
 		}
+
+#ifdef FPM_NO_FLOATING_WIDENING
+		/// Raw value of a floating-point number for a type with a small range (see `detail::covers`), which cannot
+		/// represent the scale: the whole number and the fraction bits separately, from the magnitude, modulo the range
+		template<std::floating_point T>
+		[[nodiscard]] inline static constexpr BaseType floating_to_raw_small(const T val) noexcept
+		{
+			assert(val - val == T{0}); // finite
+
+			using U = std::make_unsigned_t<std::common_type_t<BaseType, unsigned int>>;
+			constexpr int32_t integral_bits = BITS - static_cast<int32_t>(FractionBits);
+			const bool negative = val < T{0};
+			T magnitude = negative ? -val : val;
+			// Without the multiples of the range, which is exact: for the numbers that reach it (the ones below it would
+			// underflow in the reduction). The type may have no such numbers.
+			if constexpr(integral_bits < std::numeric_limits<T>::max_exponent)
+			{
+				constexpr T range = detail::power_of_two<T>(integral_bits);
+				if(magnitude >= range)
+					magnitude = detail::modulo_power_of_two(magnitude, integral_bits);
+			}
+			const auto whole = static_cast<uint64_t>(magnitude); // truncated
+			magnitude -= static_cast<T>(whole);
+			const uint64_t fraction = detail::fraction_digits(magnitude, static_cast<int32_t>(FractionBits)); // what is left: in magnitude
+			auto raw = static_cast<U>((whole << FractionBits) | fraction);
+			if constexpr(EnableRounding)
+			{
+				if(magnitude >= static_cast<T>(0.5))
+					++raw; // up to the range itself, which is 0
+			}
+			return static_cast<BaseType>(negative ? static_cast<U>(U{0} - raw) : raw);
+		}
+#endif
 
 		/// Raw value of a floating-point number beyond the range: modulo the range, like for an integer that does not fit
 		template<std::floating_point T>
@@ -653,7 +825,7 @@ namespace fpm
 			auto result = static_cast<U>(scaled); // truncated
 			if constexpr(EnableRounding)
 			{
-				if(scaled - static_cast<T>(result) >= T{0.5})
+				if(scaled - static_cast<T>(result) >= static_cast<T>(0.5))
 					++result;
 			}
 			return static_cast<BaseType>(negative ? U{0} - result : result);

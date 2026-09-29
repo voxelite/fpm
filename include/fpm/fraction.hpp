@@ -39,6 +39,9 @@ namespace fpm
 		template<typename T>
 		using unsigned_with = std::make_unsigned_t<std::common_type_t<BaseType, T, unsigned int>>;
 
+		/// The bits of the base type, which are the fraction
+		static constexpr int32_t BITS = static_cast<int32_t>(fraction_bits);
+
 		struct raw_construct_tag{};
 		inline constexpr fraction(const BaseType val, raw_construct_tag) noexcept : m_value(val) {}
 
@@ -49,7 +52,11 @@ namespace fpm
 		/// With FPM_FRACTION_STRICT the number must be in [0, 1).
 		template<std::floating_point T>
 		inline constexpr explicit fraction(const T val) noexcept
+#ifndef FPM_NO_FLOATING_WIDENING
+			: m_value(floating_to_raw(static_cast<detail::calculation_t<T, BITS, BITS>>(val)))
+#else
 			: m_value(floating_to_raw(val))
+#endif
 		{}
 
 		/// The fraction of a fixed-point number: val - floor(val), so -0.25 gives 0.75.
@@ -68,12 +75,15 @@ namespace fpm
 			: m_value(fraction_to_raw(val.raw_value()))
 		{}
 
-		/// Explicit conversion to a floating-point type.
+		/// Explicit conversion to a floating-point type: the nearest number.
 		/// The result is 1 if the fraction is closer to 1 than the floating-point type can represent.
 		template<std::floating_point T>
 		[[nodiscard]] inline constexpr explicit operator T() const noexcept
 		{
-			return static_cast<T>(m_value) / (half_scale<T>() * T{2});
+			if constexpr(detail::covers<T>(BITS, BITS))
+				return static_cast<T>(m_value) / (half_scale<T>() * T{2});
+			else
+				return detail::nearest<T>(m_value, false, BITS);
 		}
 
 		/// Explicit conversion to a fixed-point type. Fraction bits that don't fit are rounded to nearest
@@ -167,14 +177,50 @@ namespace fpm
 #ifdef FPM_FRACTION_STRICT
 			assert(val >= T{0} && val < T{1});
 #endif
-			// The fraction times 2^fraction_bits rounded to nearest, in two steps: neither the scale nor a result
-			// that rounds up to it fits in the base type. The sum wraps around for 1.
+#ifdef FPM_NO_FLOATING_WIDENING
+			if constexpr(!detail::covers<T>(BITS, BITS))
+				return floating_to_raw_small(val);
+			else
+#endif
+				return floating_to_raw_scaled(val);
+		}
+
+#ifdef FPM_NO_FLOATING_WIDENING
+		/// Raw value of a floating-point number for a type with a small range (see `detail::covers`), which cannot
+		/// represent the scale: the fraction bits of the magnitude, rounded to nearest (ties upwards for the number).
+		/// For a negative number, whose fraction is 1 - m for its magnitude m, that is -m rounded with ties downwards.
+		template<std::floating_point T>
+		[[nodiscard]] inline static constexpr BaseType floating_to_raw_small(const T val) noexcept
+		{
 			using U = unsigned_with<BaseType>;
-			// (The fraction is 1 for a negative number that is too small to make a difference: that is 0 as well.)
-			const T scaled = detail::modulo_power_of_two(val, 0) * half_scale<T>();
+			const bool negative = val < T{0};
+			T rest = detail::modulo_power_of_two(negative ? -val : val, 0); // exact
+			auto raw = static_cast<U>(detail::fraction_digits(rest, BITS)); // what is left: in rest
+			if(negative ? rest > static_cast<T>(0.5) : rest >= static_cast<T>(0.5))
+				++raw; // up to 1, which is 0
+			return static_cast<BaseType>(negative ? static_cast<U>(U{0} - raw) : raw);
+		}
+#endif
+
+		/// Raw value of a floating-point number, for a type that represents the scale (see `detail::covers`)
+		template<std::floating_point T>
+		[[nodiscard]] inline static constexpr BaseType floating_to_raw_scaled(const T val) noexcept
+		{
+			// The fraction times 2^fraction_bits rounded to nearest (ties upwards), in two steps: neither the scale nor
+			// a result that rounds up to it fits in the base type. The sum wraps around for 1.
+			// A negative number from its magnitude m, which is exact (unlike 1 - m in the floating-point type): its
+			// fraction is 1 - m, so its raw value is -m * 2^fraction_bits rounded to nearest with ties downwards.
+			// (Without branches on the sign: comparisons that count, and a mask.)
+			using U = unsigned_with<BaseType>;
+			const bool negative = val < T{0};
+			const T scaled = detail::modulo_power_of_two(negative ? -val : val, 0) * half_scale<T>();
 			const auto high = static_cast<BaseType>(scaled); // truncated
-			const auto low = static_cast<BaseType>((scaled - static_cast<T>(high)) * T{2} + T{0.5}); // 0, 1 or 2
-			return static_cast<BaseType>(static_cast<U>(high) * 2 + low);
+			const T twice_rest = (scaled - static_cast<T>(high)) * T{2}; // in [0, 2), exact
+			const auto mask = static_cast<U>(U{0} - static_cast<U>(negative));
+			const auto ties = static_cast<U>(static_cast<U>(twice_rest == static_cast<T>(0.5)) + static_cast<U>(twice_rest == static_cast<T>(1.5)));
+			const auto low = static_cast<U>(static_cast<U>(twice_rest >= static_cast<T>(0.5)) + static_cast<U>(twice_rest >= static_cast<T>(1.5)) - (ties & mask));
+			const auto raw = static_cast<U>(static_cast<U>(high) * 2 + low);
+			return static_cast<BaseType>(static_cast<U>((raw ^ mask) - mask));
 		}
 
 		template<uint32_t F, bool R, std::integral B>

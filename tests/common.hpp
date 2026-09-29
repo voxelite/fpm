@@ -83,6 +83,23 @@ inline std::string text(const reference_t value)
 	return std::format("{}", value);
 }
 
+/// The raw value of a fixed-point type for a number, with exact arithmetic (where the reference type has the bits of the
+/// number): rounded (ties away from zero) or truncated, modulo the range
+template<typename P>
+typename P::base_type expected_raw(const reference_t value)
+{
+	// Without the multiples of the range first (which is exact), so the scaled number is not too large
+	using B = typename P::base_type;
+	const int bits = static_cast<int>(sizeof(B) * 8);
+	const int fraction_bits = static_cast<int>(P::fraction_bits);
+	const reference_t scaled = std::ldexp(std::fmod(std::abs(value), std::ldexp(reference_t{1}, bits - fraction_bits)), fraction_bits); // in [0, 2^bits)
+	reference_t whole = std::floor(scaled);
+	if(P::enable_rounding && scaled - whole >= reference_t{0.5})
+		whole += 1;
+	const auto magnitude = static_cast<uint64_t>(std::fmod(whole, std::ldexp(reference_t{1}, bits))); // 2^bits (rounded up to) is 0
+	return static_cast<B>(value < 0 ? 0 - magnitude : magnitude);
+}
+
 /// The locale of the environment (""), or "C" where the standard library supports no other (MinGW's libstdc++)
 inline std::locale environment_locale()
 {

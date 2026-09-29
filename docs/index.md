@@ -200,6 +200,11 @@ You must still guard against overflow, though: see [below](#overflow).
 
 Numbers that a type cannot represent wrap around when they are converted to it, for integers and floating-point numbers alike:
 `fpm::fixed_16_16 { 65537.5 }` is 1.5. The result is the same for every platform. Floating-point numbers must be finite.
+The conversion to a floating-point type gives the nearest number of that type (infinity beyond its range).
+Every floating-point type works, also the ones of `<stdfloat>` with a small range or precision, like `std::float16_t` and `std::bfloat16_t`.
+The conversions of a type with a small range (like `std::float16_t`, which cannot represent 2<sup>16</sup>) are calculated in `float`,
+which represents its numbers exactly. Define `FPM_NO_FLOATING_WIDENING` (or set the CMake option of that name) to calculate them in the type itself:
+the same results, but several times slower where the processor has no arithmetic for the type (most of x86).
 
 Arithmetic and comparisons with integers work for signed and unsigned integers alike (e.g. `total / values.size()`).
 Comparisons with integers are exact, also for integers that the fixed-point type cannot represent.
