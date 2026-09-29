@@ -589,12 +589,14 @@ namespace
 			ASSERT_EQ(result.ec, std::errc{});
 			const std::string_view text(buffer.data(), static_cast<std::size_t>(result.ptr - buffer.data()));
 
-			// Expected: fine_raw / 256 rounded to nearest (ties to even), or truncated towards zero
+			// Expected: fine_raw / 256 rounded to nearest (ties to even), or truncated towards zero.
+			// (Rounded from the floor and a remainder in [0, 256): with `fine_raw % 256` and a correction for a negative
+			// remainder, MSVC's optimizer corrected the negative multiples of 256 as well.)
 			int64_t expected = fine_raw / 256;
-			int64_t remainder = fine_raw % 256;
 			if constexpr(P::enable_rounding)
 			{
-				if(remainder < 0) { remainder += 256; --expected; } // floor
+				expected = fine_raw >> 8; // floor
+				const int64_t remainder = fine_raw & 255;
 				if(remainder > 128 || (remainder == 128 && (expected & 1) != 0))
 					++expected;
 			}
