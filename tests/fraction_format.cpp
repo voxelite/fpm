@@ -101,6 +101,39 @@ namespace
 		return os.str();
 	}
 
+	/// Like `stream`, for a reference number with these flags, precision and width. With `std::format` where the type
+	/// cannot be written to a stream (std::float128_t in libstdc++): in the notation that the standard defines for the
+	/// streams, the one of printf (like std::format)
+	template<typename T = reference_t>
+	std::string stream_reference(const T value, const std::ios::fmtflags flags, const int precision, const int width = 0)
+	{
+		if constexpr(requires(std::ostream& os) { os << value; })
+		{
+			std::ostringstream os;
+			os.imbue(std::locale::classic());
+			os.flags(flags);
+			os.precision(precision);
+			os.width(width);
+			os << value;
+			return os.str();
+		}
+		else
+		{
+			const auto notation = flags & std::ios::floatfield;
+			std::string specification = "{:";
+			if(flags & std::ios::showpos)
+				specification += '+';
+			if(flags & std::ios::showpoint)
+				specification += '#';
+			if(width > 0)
+				specification += std::to_string(width);
+			specification += '.' + std::to_string(precision);
+			specification += (notation == std::ios::fixed) ? 'f' : (notation == std::ios::scientific) ? 'e' : 'g';
+			specification += '}';
+			return std::vformat(specification, std::make_format_args(value));
+		}
+	}
+
 	template<typename P>
 	struct read_result
 	{
@@ -204,26 +237,20 @@ TYPED_TEST(fraction_format, like_fixed)
 	}
 }
 
-// Like `long double`, where it represents the values exactly
+// Like the reference type, where it represents the values exactly
 TYPED_TEST(fraction_format, like_floating_point)
 {
 	using P = TypeParam;
-	if(std::numeric_limits<long double>::digits < 64)
-		GTEST_SKIP() << "long double has less than 64 bits of precision";
+	if(!reference_has(static_cast<int>(P::fraction_bits)))
+		GTEST_SKIP() << "the reference type has fewer bits than the type";
 
 	for(const P x : values<P>())
 	{
-		const long double value = std::ldexp(static_cast<long double>(x.raw_value()), -static_cast<int>(P::fraction_bits));
-#if defined(_LIBCPP_VERSION)
-		// libc++ formats a `long double` with the precision of a `double`, so it's only a reference for the values
-		// that a `double` represents exactly
-		if(static_cast<long double>(static_cast<double>(value)) != value)
-			continue;
-#endif
+		const reference_t value = std::ldexp(static_cast<reference_t>(x.raw_value()), -static_cast<int>(P::fraction_bits));
 		for(const char* const specification : specifications)
 		{
 			// With a precision, or a type that implies one: not the shortest representation (which depends on the type),
-			// nor the exact hexadecimal one (which is normalized differently for `long double`)
+			// nor the exact hexadecimal one (which is normalized differently for some types)
 			const std::string_view view(specification);
 			if(view.find_first_of("aA") != std::string_view::npos)
 				continue;
@@ -240,10 +267,10 @@ TYPED_TEST(fraction_format, like_floating_point)
 
 		for(const int precision : {0, 1, 3, 6, 20, 70})
 		{
-			ASSERT_EQ(stream(value, std::setprecision(precision)), stream(x, std::setprecision(precision)));
-			ASSERT_EQ(stream(value, std::fixed, std::setprecision(precision)), stream(x, std::fixed, std::setprecision(precision)));
-			ASSERT_EQ(stream(value, std::scientific, std::setprecision(precision)), stream(x, std::scientific, std::setprecision(precision)));
-			ASSERT_EQ(stream(value, std::showpos, std::setw(30), std::setprecision(precision)), stream(x, std::showpos, std::setw(30), std::setprecision(precision)));
+			ASSERT_EQ(stream_reference(value, {}, precision), stream(x, std::setprecision(precision)));
+			ASSERT_EQ(stream_reference(value, std::ios::fixed, precision), stream(x, std::fixed, std::setprecision(precision)));
+			ASSERT_EQ(stream_reference(value, std::ios::scientific, precision), stream(x, std::scientific, std::setprecision(precision)));
+			ASSERT_EQ(stream_reference(value, std::ios::showpos, precision, 30), stream(x, std::showpos, std::setw(30), std::setprecision(precision)));
 		}
 	}
 }
@@ -403,17 +430,12 @@ TYPED_TEST(fraction_format, locale)
 TYPED_TEST(fraction_format, large_precision)
 {
 	using P = TypeParam;
-	if(std::numeric_limits<long double>::digits < 64)
-		GTEST_SKIP() << "long double has less than 64 bits of precision";
+	if(!reference_has(static_cast<int>(P::fraction_bits)))
+		GTEST_SKIP() << "the reference type has fewer bits than the type";
 
 	for(const P x : values<P>(20))
 	{
-		const long double reference = std::ldexp(static_cast<long double>(x.raw_value()), -static_cast<int>(P::fraction_bits));
-#if defined(_LIBCPP_VERSION)
-		// (See above: libc++ formats with the precision of a `double`)
-		if(static_cast<long double>(static_cast<double>(reference)) != reference)
-			continue;
-#endif
+		const reference_t reference = std::ldexp(static_cast<reference_t>(x.raw_value()), -static_cast<int>(P::fraction_bits));
 		for(const int precision : {0, 1, 40, 47, 48, 49, 60, 100, 127, 128, 129, 200, 1000, 5000})
 		{
 			for(const char* const specification : {"{:.{}f}", "{:.{}e}", "{:.{}g}", "{:.{}}", "{:#.{}f}", "{:#.{}e}", "{:#.{}g}", "{:#.{}}", "{:+#020.{}G}"})
@@ -426,10 +448,10 @@ TYPED_TEST(fraction_format, large_precision)
 				ASSERT_EQ(std::vformat(specification, std::make_format_args(reference, precision)), std::vformat(specification, std::make_format_args(x, precision)))
 					<< specification << " with " << precision;
 			}
-			ASSERT_EQ(stream(reference, std::setprecision(precision)), stream(x, std::setprecision(precision)));
-			ASSERT_EQ(stream(reference, std::showpoint, std::setprecision(precision)), stream(x, std::showpoint, std::setprecision(precision)));
-			ASSERT_EQ(stream(reference, std::fixed, std::showpoint, std::setprecision(precision)), stream(x, std::fixed, std::showpoint, std::setprecision(precision)));
-			ASSERT_EQ(stream(reference, std::scientific, std::showpoint, std::setprecision(precision)), stream(x, std::scientific, std::showpoint, std::setprecision(precision)));
+			ASSERT_EQ(stream_reference(reference, {}, precision), stream(x, std::setprecision(precision)));
+			ASSERT_EQ(stream_reference(reference, std::ios::showpoint, precision), stream(x, std::showpoint, std::setprecision(precision)));
+			ASSERT_EQ(stream_reference(reference, std::ios::fixed | std::ios::showpoint, precision), stream(x, std::fixed, std::showpoint, std::setprecision(precision)));
+			ASSERT_EQ(stream_reference(reference, std::ios::scientific | std::ios::showpoint, precision), stream(x, std::scientific, std::showpoint, std::setprecision(precision)));
 		}
 	}
 }

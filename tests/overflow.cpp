@@ -113,7 +113,7 @@ namespace
 		{ \
 			const wide exact = (expected_raw); \
 			if(wraps || fits<P>(exact)) \
-				ASSERT_EQ(wrapped<P>(exact), (expression).raw_value()) << #expression << " for " << static_cast<long double>(x.raw_value()) << " and " << static_cast<long double>(y.raw_value()); \
+				ASSERT_EQ(wrapped<P>(exact), (expression).raw_value()) << #expression << " for the raw values " << +x.raw_value() << " and " << +y.raw_value(); \
 		} while(false)
 
 	// Constant expressions, where undefined behavior does not compile
@@ -266,16 +266,18 @@ TYPED_TEST(overflow, functions_saturate)
 	using L = std::numeric_limits<P>;
 	if(!defined)
 		GTEST_SKIP() << "only with FPM_DEFINED_OVERFLOW";
-	const auto number = [](const P value) { return std::ldexp(static_cast<long double>(value.raw_value()), -static_cast<int>(P::fraction_bits)); };
-	const long double unit = number(P::from_raw_value(1));
-	const long double largest = number(L::max());
-	const long double least = number(L::lowest());
-	const long double tolerance = 12 * unit;
+	if(!reference_has(std::numeric_limits<B>::digits))
+		GTEST_SKIP() << "the reference type has fewer bits than the type";
+	const auto number = [](const P value) { return std::ldexp(static_cast<reference_t>(value.raw_value()), -static_cast<int>(P::fraction_bits)); };
+	const reference_t unit = number(P::from_raw_value(1));
+	const reference_t largest = number(L::max());
+	const reference_t least = number(L::lowest());
+	const reference_t tolerance = 12 * unit;
 	const bool is_signed = std::is_signed_v<B>;
-	const long double minus_one = -1;
+	const reference_t minus_one = -1;
 
 	int beyond = 0;
-	const auto expect = [&](const char* name, const P result, const long double exact, const long double first, const long double second = 0)
+	const auto expect = [&](const char* name, const P result, const reference_t exact, const reference_t first, const reference_t second = 0)
 	{
 		// Only the results that are clearly beyond the range: the ones next to its ends are rounded
 		if(exact > largest + tolerance)
@@ -292,7 +294,7 @@ TYPED_TEST(overflow, functions_saturate)
 	const auto all = values<P>(100);
 	for(const P x : all)
 	{
-		const long double v = number(x);
+		const reference_t v = number(x);
 		expect("exp", exp(x), std::exp(v), v);
 		expect("exp2", exp2(x), std::exp2(v), v);
 		expect("expm1", expm1(x), std::expm1(v), v);
@@ -310,15 +312,15 @@ TYPED_TEST(overflow, functions_saturate)
 		{
 			for(const int e : {-7, -3, -2, -1, 1, 2, 3, 8, 31})
 			{
-				expect("pow with an integer", pow(x, e), std::pow(v, static_cast<long double>(e)), v, e);
+				expect("pow with an integer", pow(x, e), std::pow(v, static_cast<reference_t>(e)), v, e);
 				if(is_signed || e > 0)
 					expect("pow with a fixed-point integer", pow(x, P::from_raw_value(wrapped<P>(wide{e} << P::fraction_bits))),
-						fits<P>(wide{e} << P::fraction_bits) ? std::pow(v, static_cast<long double>(e)) : 0, v, e);
+						fits<P>(wide{e} << P::fraction_bits) ? std::pow(v, static_cast<reference_t>(e)) : 0, v, e);
 			}
 		}
 		for(const P y : {all[0], all[1], all[4], all[5], all[9], all[10], all[13], all[14], all[20], all[31]})
 		{
-			const long double w = number(y);
+			const reference_t w = number(y);
 			if(x.raw_value() != 0 || y.raw_value() != 0)
 				expect("atan2", atan2(x, y), std::atan2(v, w), v, w);
 			expect("hypot", hypot(x, y), std::hypot(v, w), v, w);
@@ -479,33 +481,33 @@ TYPED_TEST(overflow, functions_next_to_the_maximum)
 {
 	using P = TypeParam;
 	using B = typename P::base_type;
-	if(long_double_functions_digits() < std::numeric_limits<B>::digits)
-		GTEST_SKIP() << "the functions of long double are less precise than the type";
-	const auto number = [](const P value) { return std::ldexp(static_cast<long double>(value.raw_value()), -static_cast<int>(P::fraction_bits)); };
-	const long double unit = number(P::from_raw_value(1));
-	const long double largest = number(std::numeric_limits<P>::max());
-	const long double least = number(std::numeric_limits<P>::lowest());
-	const long double tolerance = (sizeof(B) == 1 ? 3 : sizeof(B) == 2 ? 4 : 10) * unit;
-	const auto from_number = [&](const long double value) { return P::from_raw_value(static_cast<B>(std::llroundl(value / unit))); };
+	if(!reference_has(std::numeric_limits<B>::digits))
+		GTEST_SKIP() << "the reference type has fewer bits than the type";
+	const auto number = [](const P value) { return std::ldexp(static_cast<reference_t>(value.raw_value()), -static_cast<int>(P::fraction_bits)); };
+	const reference_t unit = number(P::from_raw_value(1));
+	const reference_t largest = number(std::numeric_limits<P>::max());
+	const reference_t least = number(std::numeric_limits<P>::lowest());
+	const reference_t tolerance = (sizeof(B) == 1 ? 3 : sizeof(B) == 2 ? 4 : 10) * unit;
+	const auto from_number = [&](const reference_t value) { return P::from_raw_value(static_cast<B>(std::llround(value / unit))); };
 
 	auto inputs = values<P>();
 	for(int i = 0; i <= 64; ++i)
 	{
 		// e^x from the maximum to 1 more than it, 2^x up to the maximum, and 1 + x around the top of the range
-		inputs.push_back(from_number(std::log(largest + static_cast<long double>(i) / 64)));
-		inputs.push_back(from_number(std::log2(largest) - static_cast<long double>(i) * unit));
+		inputs.push_back(from_number(std::log(largest + static_cast<reference_t>(i) / 64)));
+		inputs.push_back(from_number(std::log2(largest) - static_cast<reference_t>(i) * unit));
 		inputs.push_back(P::from_raw_value(static_cast<B>(std::numeric_limits<B>::max() - static_cast<B>(i))));
 		const wide below_one_less = static_cast<wide>(std::numeric_limits<B>::max()) - (wide{1} << P::fraction_bits) + (i - 32);
 		if(fits<P>(below_one_less))
 			inputs.push_back(P::from_raw_value(static_cast<B>(below_one_less)));
 	}
 
-	const auto expect = [&](const char* name, const P x, const P result, const long double exact)
+	const auto expect = [&](const char* name, const P x, const P result, const reference_t exact)
 	{
 		if(exact < least)
 			return; // not representable, and nothing saturates there
 		if(exact <= largest)
-			EXPECT_LE(static_cast<double>(std::fabs(number(result) - exact) / unit), static_cast<double>(tolerance / unit)) << name << " of the raw value " << +x.raw_value();
+			EXPECT_LE(static_cast<double>(std::abs(number(result) - exact) / unit), static_cast<double>(tolerance / unit)) << name << " of the raw value " << +x.raw_value();
 		else if(exact > largest + tolerance)
 			EXPECT_EQ(std::numeric_limits<P>::max(), result) << name << " of the raw value " << +x.raw_value();
 		else
@@ -513,7 +515,7 @@ TYPED_TEST(overflow, functions_next_to_the_maximum)
 	};
 	for(const P x : inputs)
 	{
-		const long double v = number(x);
+		const reference_t v = number(x);
 		expect("exp", x, exp(x), std::exp(v));
 		expect("exp2", x, exp2(x), std::exp2(v));
 		expect("expm1", x, expm1(x), std::expm1(v));

@@ -4,7 +4,6 @@
 
 #include <array>
 #include <cmath>
-#include <cstdio>
 #include <random>
 #include <string>
 #include <string_view>
@@ -455,61 +454,35 @@ TYPED_TEST(fraction_charconv, rounds_to_nearest_even)
 }
 #endif
 
-namespace
-{
-	/// snprintf of the C library. On MinGW its own one: the one of Windows has no `long double` (which is `double` there).
-	template<typename... Args>
-	void print(std::array<char, 256>& buffer, const char* format, const Args... args)
-	{
-#ifdef __MINGW32__
-		__mingw_snprintf(buffer.data(), buffer.size(), format, args...);
-#else
-		std::snprintf(buffer.data(), buffer.size(), format, args...);
-#endif
-	}
-}
-
-// Like printf, where `long double` represents the values exactly
+// Like printf, which `std::to_chars` of the reference type is (where it represents the values exactly)
 TYPED_TEST(fraction_charconv, precision_like_printf)
 {
 	using P = TypeParam;
-	// (The printf of Emscripten converts `long double` to `double`)
-	std::array<char, 256> check{};
-	print(check, "%.20Lf", 1 + std::ldexp(1.0L, -60));
-	if(std::numeric_limits<long double>::digits < 64 || std::string(check.data()) == "1.00000000000000000000")
-		GTEST_SKIP() << "long double, or its printf, has less than 64 bits of precision";
+	if(!reference_has(static_cast<int>(P::fraction_bits)))
+		GTEST_SKIP() << "the reference type has fewer bits than the type";
 
+	const auto reference_string = [](const reference_t value, const auto... args)
+	{
+		std::array<char, 1024> buffer{};
+		const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, args...);
+		EXPECT_EQ(result.ec, std::errc{});
+		return std::string(buffer.data(), result.ptr);
+	};
 	for(const P x : values<P>(300))
 	{
-		const long double reference = std::ldexp(static_cast<long double>(x.raw_value()), -static_cast<int>(P::fraction_bits));
+		const reference_t reference = std::ldexp(static_cast<reference_t>(x.raw_value()), -static_cast<int>(P::fraction_bits));
 		for(const int precision : {0, 1, 2, 3, 6, 10, 17, 30, 70})
 		{
-			std::array<char, 256> buffer{};
-			print(buffer, "%.*Lf", precision, reference);
-			ASSERT_EQ(std::string(buffer.data()), to_chars_string(x, std::chars_format::fixed, precision));
-			print(buffer, "%.*Le", precision, reference);
-			ASSERT_EQ(std::string(buffer.data()), to_chars_string(x, std::chars_format::scientific, precision));
-			print(buffer, "%.*Lg", precision, reference);
-			ASSERT_EQ(std::string(buffer.data()), to_chars_string(x, std::chars_format::general, precision));
+			ASSERT_EQ(reference_string(reference, std::chars_format::fixed, precision), to_chars_string(x, std::chars_format::fixed, precision));
+			ASSERT_EQ(reference_string(reference, std::chars_format::scientific, precision), to_chars_string(x, std::chars_format::scientific, precision));
+			ASSERT_EQ(reference_string(reference, std::chars_format::general, precision), to_chars_string(x, std::chars_format::general, precision));
 		}
 
-		// Hexadecimal: `double` normalizes like `to_chars` (1.xxx), for the values it represents exactly
-		const auto value = static_cast<double>(reference);
-		if(static_cast<long double>(value) == reference)
-		{
-			for(const int precision : {-1, 0, 1, 2, 5, 13, 20})
-			{
-				std::array<char, 256> buffer{};
-				if(precision < 0)
-					print(buffer, "%a", value);
-				else
-					print(buffer, "%.*a", precision, value);
-				const std::string expected(buffer.data() + 2); // without "0x"
-				if(precision < 0)
-					ASSERT_EQ(expected, to_chars_string(x, std::chars_format::hex));
-				ASSERT_EQ(expected, to_chars_string(x, std::chars_format::hex, precision));
-			}
-		}
+		// Hexadecimal: the reference type normalizes like `to_chars` (1.xxx). Without a precision: exact.
+		ASSERT_EQ(reference_string(reference, std::chars_format::hex), to_chars_string(x, std::chars_format::hex));
+		ASSERT_EQ(reference_string(reference, std::chars_format::hex), to_chars_string(x, std::chars_format::hex, -1));
+		for(const int precision : {0, 1, 2, 5, 13, 20})
+			ASSERT_EQ(reference_string(reference, std::chars_format::hex, precision), to_chars_string(x, std::chars_format::hex, precision));
 	}
 }
 

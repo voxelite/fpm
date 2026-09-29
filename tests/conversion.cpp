@@ -154,17 +154,17 @@ namespace
 {
 	/// The raw value of a number, with exact arithmetic: rounded (ties away from zero) or truncated, modulo the range
 	template<typename P>
-	typename P::base_type expected_raw(const long double value)
+	typename P::base_type expected_raw(const reference_t value)
 	{
 		// Without the multiples of the range first (which is exact), so the scaled number is not too large
 		using B = typename P::base_type;
 		const int bits = static_cast<int>(sizeof(B) * 8);
 		const int fraction_bits = static_cast<int>(P::fraction_bits);
-		const long double scaled = std::ldexp(std::fmod(std::abs(value), std::ldexp(1.0L, bits - fraction_bits)), fraction_bits); // in [0, 2^bits)
-		long double whole = std::floor(scaled);
-		if(P::enable_rounding && scaled - whole >= 0.5L)
+		const reference_t scaled = std::ldexp(std::fmod(std::abs(value), std::ldexp(reference_t{1}, bits - fraction_bits)), fraction_bits); // in [0, 2^bits)
+		reference_t whole = std::floor(scaled);
+		if(P::enable_rounding && scaled - whole >= reference_t{0.5})
 			whole += 1;
-		const auto magnitude = static_cast<uint64_t>(std::fmod(whole, std::ldexp(1.0L, bits))); // 2^bits (rounded up to) is 0
+		const auto magnitude = static_cast<uint64_t>(std::fmod(whole, std::ldexp(reference_t{1}, bits))); // 2^bits (rounded up to) is 0
 		return static_cast<B>(value < 0 ? 0 - magnitude : magnitude);
 	}
 
@@ -180,7 +180,7 @@ namespace
 		// The ends of the range, and their multiples
 		for(const int k : {-3, -2, -1, 1, 2, 3, 1000, -1000})
 		{
-			const auto end = static_cast<T>(std::ldexp(static_cast<long double>(k), integral - 1));
+			const auto end = static_cast<T>(std::ldexp(static_cast<reference_t>(k), integral - 1));
 			for(const T offset : {T{0}, T{0.25}, T{-0.25}, T{0.5}, T{-0.5}, T{1}, T{-1}})
 			{
 				numbers.push_back(end + offset);
@@ -192,7 +192,7 @@ namespace
 		for(int i = 0; i < 4000; ++i)
 		{
 			const int exponent = static_cast<int>(rng() % 140) - 50;
-			const auto mantissa = static_cast<long double>(rng() >> 11) / 9007199254740992.0L + 1;
+			const auto mantissa = std::ldexp(static_cast<reference_t>(rng() >> 11), -53) + 1;
 			const auto number = static_cast<T>(std::ldexp((rng() % 2 == 0) ? mantissa : -mantissa, exponent));
 			if(number - number == T{0})
 				numbers.push_back(number);
@@ -200,10 +200,10 @@ namespace
 
 		for(const T number : numbers)
 		{
-			// (Exact arithmetic with 64 bits of precision: not for the numbers that need more)
-			if(std::numeric_limits<T>::digits > 64 || std::numeric_limits<long double>::digits < 64)
+			// (Exact arithmetic in the reference type: where it has the bits of the numbers)
+			if(!reference_has(std::numeric_limits<T>::digits))
 				continue;
-			ASSERT_EQ(expected_raw<P>(static_cast<long double>(number)), P{number}.raw_value()) << std::setprecision(25) << static_cast<long double>(number);
+			ASSERT_EQ(expected_raw<P>(static_cast<reference_t>(number)), P{number}.raw_value()) << text(static_cast<reference_t>(number));
 		}
 	}
 

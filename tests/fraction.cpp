@@ -51,12 +51,15 @@ namespace
 		return result;
 	}
 
-	/// The exact value, which needs up to 64 bits of precision
+	/// The exact value, where the reference type has the bits of the fraction (see `reference_has`)
 	template<typename P>
-	long double exact(const P x)
+	reference_t exact(const P x)
 	{
-		return std::ldexp(static_cast<long double>(x.raw_value()), -static_cast<int>(P::fraction_bits));
+		return std::ldexp(static_cast<reference_t>(x.raw_value()), -static_cast<int>(P::fraction_bits));
 	}
+
+	template<typename P>
+	constexpr int bits_of = static_cast<int>(P::fraction_bits);
 
 	/// All operations in constant expressions, where undefined behavior does not compile
 	template<typename B>
@@ -158,12 +161,12 @@ TYPED_TEST(fraction, wraps_around)
 			EXPECT_EQ(static_cast<B>(uint64_t{x.raw_value()} + uint64_t{y.raw_value()}), (x + y).raw_value());
 			EXPECT_EQ(static_cast<B>(uint64_t{x.raw_value()} - uint64_t{y.raw_value()}), (x - y).raw_value());
 
-			// Modulo 1, against exact arithmetic (where the floating-point type is precise enough for it)
-			if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<long double>::digits))
+			// Modulo 1, against exact arithmetic (where the reference type is precise enough for it)
+			if(reference_has(bits_of<P> + 1))
 			{
-				const long double sum = exact(x) + exact(y);
+				const reference_t sum = exact(x) + exact(y);
 				EXPECT_EQ(sum >= 1 ? sum - 1 : sum, exact(x + y));
-				const long double difference = exact(x) - exact(y);
+				const reference_t difference = exact(x) - exact(y);
 				EXPECT_EQ(difference < 0 ? difference + 1 : difference, exact(x - y));
 			}
 
@@ -219,21 +222,22 @@ TYPED_TEST(fraction, floating_point)
 
 	for(const P x : values<P>())
 	{
-		// long double has at least as many bits as any fraction where it has 64 bits of precision;
-		// otherwise the fractions with fewer bits than the floating-point type are exact
+		// The fractions with no more bits than the floating-point type are exact (`long double`, which the library
+		// supports, has 53, 64 or 113 bits, depending on the platform)
 		if(P::fraction_bits <= static_cast<uint32_t>(std::numeric_limits<long double>::digits))
 		{
-			EXPECT_EQ(exact(x), static_cast<long double>(x));
+			if(reference_has(bits_of<P>))
+				EXPECT_EQ(exact(x), static_cast<reference_t>(static_cast<long double>(x)));
 			EXPECT_EQ(x, P{static_cast<long double>(x)});
 		}
 		if(P::fraction_bits <= static_cast<uint32_t>(std::numeric_limits<double>::digits))
 		{
-			EXPECT_EQ(exact(x), static_cast<long double>(static_cast<double>(x)));
+			EXPECT_EQ(exact(x), static_cast<reference_t>(static_cast<double>(x)));
 			EXPECT_EQ(x, P{static_cast<double>(x)});
 		}
 		if(P::fraction_bits <= static_cast<uint32_t>(std::numeric_limits<float>::digits))
 		{
-			EXPECT_EQ(exact(x), static_cast<long double>(static_cast<float>(x)));
+			EXPECT_EQ(exact(x), static_cast<reference_t>(static_cast<float>(x)));
 			EXPECT_EQ(x, P{static_cast<float>(x)});
 		}
 
@@ -247,14 +251,14 @@ TYPED_TEST(fraction, floating_point)
 	// Rounded to nearest: within half a unit of the exact value, modulo 1
 	std::mt19937_64 rng(7);
 	std::uniform_real_distribution<double> distribution(0.0, 1.0);
-	for(int i = 0; i < 10000; ++i)
+	for(int i = 0; i < 10000 && reference_has(bits_of<P>); ++i)
 	{
 		// (Also close to 1)
 		const double value = std::min(i % 4 == 0 ? 1.0 - distribution(rng) / 300 : distribution(rng), std::nextafter(1.0, 0.0));
-		long double error = std::abs(exact(P{value}) - static_cast<long double>(value));
-		if(error > 0.5L)
+		reference_t error = std::abs(exact(P{value}) - static_cast<reference_t>(value));
+		if(error > 0.5)
 			error = 1 - error;
-		EXPECT_LE(error, std::ldexp(0.5L, -static_cast<int>(P::fraction_bits))) << value;
+		EXPECT_LE(error, std::ldexp(reference_t{0.5}, -bits_of<P>)) << value;
 	}
 
 	// The largest values below 1 round up to 1, which wraps around to 0: unless the fraction can represent them
@@ -263,12 +267,12 @@ TYPED_TEST(fraction, floating_point)
 	const float last_float = std::nextafter(1.0f, 0.0f);
 	if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<double>::digits))
 		EXPECT_EQ(P{}, P{last_double});
-	else
-		EXPECT_EQ(static_cast<long double>(last_double), exact(P{last_double}));
+	else if(reference_has(bits_of<P>))
+		EXPECT_EQ(static_cast<reference_t>(last_double), exact(P{last_double}));
 	if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<float>::digits))
 		EXPECT_EQ(P{}, P{last_float});
 	else
-		EXPECT_EQ(static_cast<long double>(last_float), exact(P{last_float}));
+		EXPECT_EQ(static_cast<reference_t>(last_float), exact(P{last_float}));
 
 	// The nearest fraction: also around the largest one, where that is 0 for the numbers closer to 1
 	if(P::fraction_bits < static_cast<uint32_t>(std::numeric_limits<double>::digits))
@@ -323,14 +327,14 @@ TYPED_TEST(fraction, floating_point)
 
 		// Against exact arithmetic
 		std::uniform_real_distribution<double> wide(-1e6, 1e6);
-		for(int i = 0; i < 10000; ++i)
+		for(int i = 0; i < 10000 && reference_has(bits_of<P>); ++i)
 		{
 			const double value = wide(rng);
-			const long double expected = static_cast<long double>(value) - std::floor(static_cast<long double>(value));
-			long double error = std::abs(exact(P{value}) - expected);
-			if(error > 0.5L)
+			const reference_t expected = static_cast<reference_t>(value) - std::floor(static_cast<reference_t>(value));
+			reference_t error = std::abs(exact(P{value}) - expected);
+			if(error > 0.5)
 				error = 1 - error;
-			EXPECT_LE(error, std::ldexp(0.5L, -static_cast<int>(P::fraction_bits))) << value;
+			EXPECT_LE(error, std::ldexp(reference_t{0.5}, -bits_of<P>)) << value;
 		}
 	}
 }
@@ -344,12 +348,15 @@ namespace
 		using QB = typename Q::base_type;
 		const int fraction_bits = static_cast<int>(P::fraction_bits);
 		const int fixed_bits = static_cast<int>(Q::fraction_bits);
-		const long double unit = std::ldexp(1.0L, -fixed_bits);
+		// The reference type must represent the values of both types exactly
+		if(!reference_has(std::max(fraction_bits, std::numeric_limits<QB>::digits)))
+			return;
+		const reference_t unit = std::ldexp(reference_t{1}, -fixed_bits);
 
 		for(const P x : values<P>())
 		{
 			const Q q(x);
-			const auto value = std::ldexp(static_cast<long double>(q.raw_value()), -fixed_bits);
+			const auto value = std::ldexp(static_cast<reference_t>(q.raw_value()), -fixed_bits);
 			if(fixed_bits >= fraction_bits)
 			{
 				// Exact, both ways
@@ -359,13 +366,13 @@ namespace
 			else if(Q::enable_rounding)
 			{
 				// Rounded to nearest, ties upwards: up to 1
-				const long double expected = std::floor(exact(x) / unit + 0.5L) * unit;
-				ASSERT_EQ(expected, value) << exact(x);
-				ASSERT_LE(value, 1.0L);
+				const reference_t expected = std::floor(exact(x) / unit + reference_t{0.5}) * unit;
+				ASSERT_EQ(expected, value) << text(exact(x));
+				ASSERT_LE(value, reference_t{1});
 			}
 			else
 			{
-				ASSERT_EQ(std::floor(exact(x) / unit) * unit, value) << exact(x);
+				ASSERT_EQ(std::floor(exact(x) / unit) * unit, value) << text(exact(x));
 			}
 		}
 
@@ -381,19 +388,19 @@ namespace
 		}
 		for(const QB raw : raws)
 		{
-			const long double value = std::ldexp(static_cast<long double>(raw), -fixed_bits);
-			const long double expected_fraction = value - std::floor(value);
-			long double expected = expected_fraction;
+			const reference_t value = std::ldexp(static_cast<reference_t>(raw), -fixed_bits);
+			const reference_t expected_fraction = value - std::floor(value);
+			reference_t expected = expected_fraction;
 			if(fixed_bits > fraction_bits)
 			{
-				const long double step = std::ldexp(1.0L, -fraction_bits);
+				const reference_t step = std::ldexp(reference_t{1}, -fraction_bits);
 				expected = Q::enable_rounding
-					? std::floor(expected_fraction / step + 0.5L) * step
+					? std::floor(expected_fraction / step + reference_t{0.5}) * step
 					: std::floor(expected_fraction / step) * step;
 				if(expected >= 1)
 					expected -= 1; // wraps around
 			}
-			ASSERT_EQ(expected, exact(P{Q::from_raw_value(raw)})) << "raw " << static_cast<long double>(raw);
+			ASSERT_EQ(expected, exact(P{Q::from_raw_value(raw)})) << "raw " << +raw;
 		}
 	}
 }
@@ -402,10 +409,7 @@ TYPED_TEST(fraction, fixed_point)
 {
 	using P = TypeParam;
 
-	// `long double` must represent the raw values exactly
-	if(std::numeric_limits<long double>::digits < 64)
-		GTEST_SKIP() << "long double has less than 64 bits of precision";
-
+	// (Every pair whose values the reference type represents exactly)
 	test_fixed<P, fpm::fixed_4_4>();
 	test_fixed<P, fpm::fixed_8_8>();
 	test_fixed<P, fpm::fixed_16_16>();
@@ -488,8 +492,8 @@ TYPED_TEST(fraction, numeric_limits)
 	EXPECT_EQ(bits, L::digits);
 	EXPECT_EQ(1 - bits, L::min_exponent);
 	EXPECT_EQ(0, L::digits10);
-	EXPECT_EQ(static_cast<int>(std::ceil(bits * std::log10(2.0L))), L::max_digits10);
-	EXPECT_EQ(-static_cast<int>(std::floor(bits * std::log10(2.0L))), L::min_exponent10);
+	EXPECT_EQ(static_cast<int>(std::ceil(bits * std::log10(reference_t{2}))), L::max_digits10);
+	EXPECT_EQ(-static_cast<int>(std::floor(bits * std::log10(reference_t{2}))), L::min_exponent10);
 
 	static_assert(L::lowest() == P{});
 	static_assert(L::min() == P::from_raw_value(1));
