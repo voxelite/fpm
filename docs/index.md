@@ -55,7 +55,7 @@ namespace fpm
 	using fixed_32_32 = fixed<std::int64_t, FPM_INT128, 32>;     // and fixed_56_8 ... fixed_8_56
 }
 ```
-The 64-bit types use `__int128` (GCC, Clang) or `std::_Signed128` (MSVC and clang-cl) as intermediate type. Define `FPM_INT128` to use another
+The 64-bit types use `__int128` (GCC, Clang) or `std::_Signed128` (MSVC and clang-cl, for 64-bit Windows) as intermediate type. Define `FPM_INT128` to use another
 128-bit type, or `FPM_NO_INT128` to not use 128-bit integers at all. Without a 128-bit type, as on most 32-bit targets, the 64-bit types are not available.
 
 ## Fractions

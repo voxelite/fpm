@@ -14,10 +14,13 @@
 // The type may be a class: it is only assumed to behave like a signed integer, with a specialization
 // of `std::numeric_limits` (type traits like `std::is_signed` do not recognize classes).
 #if !defined(FPM_INT128) && !defined(FPM_NO_INT128)
-	#if defined(_MSC_VER) && __has_include(<__msvc_int128.hpp>)
-		// MSVC and clang-cl. The latter has `__int128` as well, but the MSVC runtime lacks the functions for its division.
-		#include <__msvc_int128.hpp>
-		#define FPM_INT128 ::std::_Signed128
+	#if defined(_MSC_VER)
+		// MSVC and clang-cl, for 64-bit Windows only (like most 32-bit targets, 32-bit Windows has no 128-bit integers).
+		// clang-cl has `__int128` as well, but the MSVC runtime lacks the functions for its division.
+		#if defined(_WIN64) && __has_include(<__msvc_int128.hpp>)
+			#include <__msvc_int128.hpp>
+			#define FPM_INT128 ::std::_Signed128
+		#endif
 	#elif defined(__SIZEOF_INT128__)
 		#define FPM_INT128 __int128
 	#endif
