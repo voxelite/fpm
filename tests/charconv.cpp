@@ -488,7 +488,7 @@ namespace
 	{
 		P value{};
 		const auto result = fpm::from_chars(text.data(), text.data() + text.size(), value, fmt);
-		return result ? value : P::from_raw_value(-1); // C++26: from_chars_result converts to bool
+		return result.ec == std::errc{} ? value : P::from_raw_value(-1); // TODO: `result ?`, where every standard library converts from_chars_result to bool (C++26)
 	}
 }
 
@@ -545,7 +545,7 @@ TEST(charconv, with_std_visible)
 
 	P value{};
 	const std::string_view text = "7.75";
-	EXPECT_TRUE(from_chars(text.data(), text.data() + text.size(), value, std::chars_format::fixed));
+	EXPECT_EQ(std::errc{}, from_chars(text.data(), text.data() + text.size(), value, std::chars_format::fixed).ec); // TODO: EXPECT_TRUE, where every standard library converts from_chars_result to bool (C++26)
 	EXPECT_EQ(P(7.75), value);
 }
 
