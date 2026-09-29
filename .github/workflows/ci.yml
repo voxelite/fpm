@@ -14,13 +14,14 @@ env:
   # Only the tests: the benchmark and accuracy tools download other libraries (see the job "tools")
   CMAKE_OPTIONS: -DFPM_BUILD_BENCHMARK=OFF -DFPM_BUILD_ACCURACY=OFF
 
-# Every platform is built with the options for the results that a type cannot represent (`overflow` below):
-# FPM_DEFINED_OVERFLOW, and FPM_CHECK_OVERFLOW where there are assertions (so not for the Release builds).
+# Every platform is built with the options of the library (`library` below): the ones for the results that a type cannot
+# represent, FPM_DEFINED_OVERFLOW and (where there are assertions, so not for the Release builds) FPM_CHECK_OVERFLOW, and
+# FPM_NO_FLOATING_WIDENING wherever the tests run (for std::float16_t, which the compilers may add).
 
 jobs:
   # GCC and Clang
   linux:
-    name: Linux, ${{ matrix.cxx }}, ${{ matrix.build }} ${{ matrix.overflow }}
+    name: Linux, ${{ matrix.cxx }}, ${{ matrix.build }} ${{ matrix.library }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -28,16 +29,17 @@ jobs:
       matrix:
         cxx: [g++-14, clang++-18]
         build: [Debug, Release]
-        overflow:
+        library:
           - ""
           - -DFPM_DEFINED_OVERFLOW=ON
           - -DFPM_CHECK_OVERFLOW=ON
           - -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+          - -DFPM_NO_FLOATING_WIDENING=ON
         exclude:
           - build: Release
-            overflow: -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_CHECK_OVERFLOW=ON
           - build: Release
-            overflow: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
     steps:
       - uses: actions/checkout@v4
       - name: Configure
@@ -45,7 +47,7 @@ jobs:
           cmake -B build
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
-          ${{ env.CMAKE_OPTIONS }} ${{ matrix.overflow }}
+          ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -53,7 +55,7 @@ jobs:
 
   # The variations of the library and of the compilers
   linux-variants:
-    name: Linux, ${{ matrix.variant }} ${{ matrix.overflow }}
+    name: Linux, ${{ matrix.variant }} ${{ matrix.library }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -67,7 +69,7 @@ jobs:
           - Clang 18 without 128-bit integers
           - GCC 14 without 128-bit integers
           - GCC 14 for 32 bits (x86)
-        overflow:
+        library:
           - ""
           - -DFPM_DEFINED_OVERFLOW=ON
         include:
@@ -114,7 +116,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
           "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}"
-          ${{ env.CMAKE_OPTIONS }} ${{ matrix.options }} ${{ matrix.overflow }}
+          ${{ env.CMAKE_OPTIONS }} ${{ matrix.options }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -123,7 +125,7 @@ jobs:
   # Every header on its own, and a program that uses all of the library (so the templates are compiled as well):
   # with every combination of the options of the library, with and without assertions
   linux-headers:
-    name: Linux, headers, ${{ matrix.name }} ${{ matrix.overflow }}
+    name: Linux, headers, ${{ matrix.name }} ${{ matrix.library }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -134,7 +136,7 @@ jobs:
           - Clang 18, warnings
           - GCC 14, without exceptions
           - Clang 18, without exceptions
-        overflow:
+        library:
           - ""
           - -DFPM_DEFINED_OVERFLOW
           - -DFPM_CHECK_OVERFLOW
@@ -156,19 +158,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compile
         run: |
-          for library in "" "-DFPM_FRACTION_STRICT" "-DFPM_NO_INT128" "-DFPM_FRACTION_STRICT -DFPM_NO_INT128"; do
+          for options in "" "-DFPM_FRACTION_STRICT" "-DFPM_NO_INT128" "-DFPM_FRACTION_STRICT -DFPM_NO_INT128"; do
             for assertions in "" "-DNDEBUG"; do
-              echo "=== $library $assertions"
+              echo "=== $options $assertions"
               for header in $(cd include && find fpm -name '*.hpp' | sort); do
-                echo "#include <$header>" | ${{ matrix.cxx }} -std=c++26 ${{ matrix.flags }} ${{ matrix.overflow }} $library $assertions -Iinclude -fsyntax-only -x c++ -
+                echo "#include <$header>" | ${{ matrix.cxx }} -std=c++26 ${{ matrix.flags }} ${{ matrix.library }} $options $assertions -Iinclude -fsyntax-only -x c++ -
               done
-              ${{ matrix.cxx }} -std=c++26 ${{ matrix.flags }} ${{ matrix.overflow }} $library $assertions -Iinclude -fsyntax-only tests/esp-idf/main/main.cpp
+              ${{ matrix.cxx }} -std=c++26 ${{ matrix.flags }} ${{ matrix.library }} $options $assertions -Iinclude -fsyntax-only tests/esp-idf/main/main.cpp
             done
           done
 
   # Other architectures. ARM64 has a `long double` with 113 bits of precision.
   linux-arm64:
-    name: Linux ARM64, ${{ matrix.cxx }}, ${{ matrix.build }} ${{ matrix.overflow }}
+    name: Linux ARM64, ${{ matrix.cxx }}, ${{ matrix.build }} ${{ matrix.library }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     strategy:
@@ -176,16 +178,17 @@ jobs:
       matrix:
         cxx: [g++-14, clang++-18]
         build: [Debug, Release]
-        overflow:
+        library:
           - ""
           - -DFPM_DEFINED_OVERFLOW=ON
           - -DFPM_CHECK_OVERFLOW=ON
           - -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+          - -DFPM_NO_FLOATING_WIDENING=ON
         exclude:
           - build: Release
-            overflow: -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_CHECK_OVERFLOW=ON
           - build: Release
-            overflow: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
     steps:
       - uses: actions/checkout@v4
       - name: Configure
@@ -193,7 +196,7 @@ jobs:
           cmake -B build
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
-          ${{ env.CMAKE_OPTIONS }} ${{ matrix.overflow }}
+          ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -201,16 +204,17 @@ jobs:
 
   # With an emulator
   linux-emulated:
-    name: Linux ${{ matrix.name }} (emulated) ${{ matrix.overflow }}
+    name: Linux ${{ matrix.name }} (emulated) ${{ matrix.library }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         name: [RISC-V 64, ARM 32]
-        overflow:
+        library:
           - ""
           - -DFPM_DEFINED_OVERFLOW=ON
+          - -DFPM_NO_FLOATING_WIDENING=ON
         include:
           - name: RISC-V 64
             processor: riscv64
@@ -232,14 +236,14 @@ jobs:
           -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.processor }}
           -DCMAKE_CXX_COMPILER=${{ matrix.triple }}-g++-14
           "-DCMAKE_CROSSCOMPILING_EMULATOR=${{ matrix.emulator }};-L;/usr/${{ matrix.triple }}"
-          ${{ env.CMAKE_OPTIONS }} ${{ matrix.overflow }}
+          ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build
 
   windows:
-    name: Windows, ${{ matrix.name }}, ${{ matrix.build }} ${{ matrix.overflow }}
+    name: Windows, ${{ matrix.name }}, ${{ matrix.build }} ${{ matrix.library }}
     runs-on: windows-2022
     timeout-minutes: 30
     strategy:
@@ -247,16 +251,17 @@ jobs:
       matrix:
         name: ["MSVC", "MSVC, 32 bits (x86)", "clang-cl"]
         build: [Release, Debug]
-        overflow:
+        library:
           - ""
           - -DFPM_DEFINED_OVERFLOW=ON
           - -DFPM_CHECK_OVERFLOW=ON
           - -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+          - -DFPM_NO_FLOATING_WIDENING=ON
         exclude:
           - build: Release
-            overflow: -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_CHECK_OVERFLOW=ON
           - build: Release
-            overflow: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
         include:
           - name: MSVC
             arguments: -A x64
@@ -267,14 +272,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -B build ${{ matrix.arguments }} ${{ env.CMAKE_OPTIONS }} ${{ matrix.overflow }}
+        run: cmake -B build ${{ matrix.arguments }} ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --config ${{ matrix.build }} --parallel
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.build }}
 
   windows-mingw:
-    name: Windows, MinGW ${{ matrix.name }}, ${{ matrix.build }} ${{ matrix.overflow }}
+    name: Windows, MinGW ${{ matrix.name }}, ${{ matrix.build }} ${{ matrix.library }}
     runs-on: windows-2022
     timeout-minutes: 30
     strategy:
@@ -282,16 +287,17 @@ jobs:
       matrix:
         name: [GCC, Clang]
         build: [Debug, Release]
-        overflow:
+        library:
           - ""
           - -DFPM_DEFINED_OVERFLOW=ON
           - -DFPM_CHECK_OVERFLOW=ON
           - -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+          - -DFPM_NO_FLOATING_WIDENING=ON
         exclude:
           - build: Release
-            overflow: -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_CHECK_OVERFLOW=ON
           - build: Release
-            overflow: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
         include:
           - name: GCC
             system: UCRT64
@@ -321,7 +327,7 @@ jobs:
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
-          ${{ env.CMAKE_OPTIONS }} ${{ matrix.overflow }}
+          ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -329,23 +335,24 @@ jobs:
 
   # WebAssembly (32 bits), with Node.js to run the tests
   emscripten:
-    name: Emscripten, ${{ matrix.build }} ${{ matrix.overflow }}
+    name: Emscripten, ${{ matrix.build }} ${{ matrix.library }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         build: [Debug, Release]
-        overflow:
+        library:
           - ""
           - -DFPM_DEFINED_OVERFLOW=ON
           - -DFPM_CHECK_OVERFLOW=ON
           - -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+          - -DFPM_NO_FLOATING_WIDENING=ON
         exclude:
           - build: Release
-            overflow: -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_CHECK_OVERFLOW=ON
           - build: Release
-            overflow: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
+            library: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
     steps:
       - uses: actions/checkout@v4
       - uses: mymindstorm/setup-emsdk@v14
@@ -356,7 +363,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DCMAKE_CXX_FLAGS=-fexceptions
           -DCMAKE_EXE_LINKER_FLAGS=-fexceptions
-          ${{ env.CMAKE_OPTIONS }} ${{ matrix.overflow }}
+          ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -364,7 +371,7 @@ jobs:
 
   # Compiled only: the program of tests/esp-idf uses all of the library
   esp-idf:
-    name: ESP-IDF, ${{ matrix.target }} ${{ matrix.overflow }}
+    name: ESP-IDF, ${{ matrix.target }} ${{ matrix.library }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -372,7 +379,7 @@ jobs:
       matrix:
         # Xtensa and RISC-V, both with 32 bits
         target: [esp32, esp32c3]
-        overflow:
+        library:
           - ""
           - -DFPM_DEFINED_OVERFLOW=ON
           - -DFPM_CHECK_OVERFLOW=ON
@@ -384,7 +391,7 @@ jobs:
           esp_idf_version: v5.5
           target: ${{ matrix.target }}
           path: tests/esp-idf
-          command: idf.py ${{ matrix.overflow }} build
+          command: idf.py ${{ matrix.library }} build
 
   # The benchmark and accuracy tools, which download the libraries they compare with
   tools:

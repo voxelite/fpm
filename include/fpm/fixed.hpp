@@ -573,7 +573,13 @@ namespace fpm
 			// Calculated in the intermediate type, or in a 128-bit type if the denominator is too large for it
 			// (a fraction value up to the denominator, times 2^(FractionBits+1), must fit), or else by long division.
 			constexpr int32_t spare_bits = std::numeric_limits<IntermediateType>::digits - static_cast<int32_t>(FractionBits + 1);
-			constexpr bool fits_intermediate = spare_bits >= 64 || (NumFraction >> spare_bits) == 0;
+			constexpr bool fits_intermediate = []
+			{
+				if constexpr(spare_bits >= 64)
+					return true;
+				else
+					return (NumFraction >> spare_bits) == 0; // (a shift by 64 or more would not be defined)
+			}();
 			IntermediateType two_frac_part;
 			if constexpr(fits_intermediate)
 			{
