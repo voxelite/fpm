@@ -165,7 +165,7 @@ TEST_P(output, integers)
 	test(-1024);
 }
 
-static const std::locale s_fake_locale(std::locale(""), new fake_numpunct(',', '.', "\001\002"));
+static const std::locale s_fake_locale(environment_locale(), new fake_numpunct(',', '.', "\001\002"));
 
 INSTANTIATE_TEST_SUITE_P(output_flags, output,
 	Combine(
@@ -176,7 +176,7 @@ INSTANTIATE_TEST_SUITE_P(output_flags, output,
 		Values(0, 1, 5, 29, 128), // Precision
 		Values(0, 1, 10, 2000), // Width
 		Values(' ', '*', '0'), // Fill
-		Values(std::locale("C"), std::locale(""), s_fake_locale) // Locale
+		Values(std::locale("C"), environment_locale(), s_fake_locale) // Locale
 	)
 );
 

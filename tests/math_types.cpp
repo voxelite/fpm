@@ -75,6 +75,13 @@ namespace
 template<typename T>
 class math_types : public ::testing::Test
 {
+protected:
+	void SetUp() override
+	{
+		// The references need as many bits as the type
+		if(long_double_functions_digits() < std::numeric_limits<typename T::base_type>::digits)
+			GTEST_SKIP() << "the functions of long double are less precise than the type";
+	}
 };
 
 using MathTypes = ::testing::Types<

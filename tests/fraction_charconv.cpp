@@ -473,8 +473,11 @@ namespace
 TYPED_TEST(fraction_charconv, precision_like_printf)
 {
 	using P = TypeParam;
-	if(std::numeric_limits<long double>::digits < 64)
-		GTEST_SKIP() << "long double has less than 64 bits of precision";
+	// (The printf of Emscripten converts `long double` to `double`)
+	std::array<char, 256> check{};
+	print(check, "%.20Lf", 1 + std::ldexp(1.0L, -60));
+	if(std::numeric_limits<long double>::digits < 64 || std::string(check.data()) == "1.00000000000000000000")
+		GTEST_SKIP() << "long double, or its printf, has less than 64 bits of precision";
 
 	for(const P x : values<P>(300))
 	{

@@ -479,6 +479,8 @@ TYPED_TEST(overflow, functions_next_to_the_maximum)
 {
 	using P = TypeParam;
 	using B = typename P::base_type;
+	if(long_double_functions_digits() < std::numeric_limits<B>::digits)
+		GTEST_SKIP() << "the functions of long double are less precise than the type";
 	const auto number = [](const P value) { return std::ldexp(static_cast<long double>(value.raw_value()), -static_cast<int>(P::fraction_bits)); };
 	const long double unit = number(P::from_raw_value(1));
 	const long double largest = number(std::numeric_limits<P>::max());

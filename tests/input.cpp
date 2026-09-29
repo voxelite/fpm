@@ -210,7 +210,7 @@ TEST_F(input, decimal_point)
 	test_conversion("1..5", P(1), ".5");
 
    // Switch to a fake locale with a specific decimal separator
-	setlocale(std::locale(std::locale(""), new fake_numpunct('\'', ',', "\001\002")));
+	setlocale(std::locale(environment_locale(), new fake_numpunct('\'', ',', "\001\002")));
 	test_conversion("1\'234", P(1.234));
 }
 
@@ -219,7 +219,7 @@ TEST_F(input, thousands_separator)
 	using P = fpm::fixed_16_16;
 
 	// Switch to a fake locale with an english thousands separator
-	setlocale(std::locale(std::locale(""), new fake_numpunct('.', ',', "\003")));
+	setlocale(std::locale(environment_locale(), new fake_numpunct('.', ',', "\003")));
 
 	// Thousands groupings before decimal point are ignored
 	test_conversion("12,345.67", P(12345.67));
@@ -230,7 +230,7 @@ TEST_F(input, thousands_separator)
 	test_conversion("1.,125", P(1), ",125");
 
 	// Switch to a fake locale with a specific thousands separator
-	setlocale(std::locale(std::locale(""), new fake_numpunct('.', '\'', "\001\002")));
+	setlocale(std::locale(environment_locale(), new fake_numpunct('.', '\'', "\001\002")));
 	test_conversion("12\'345.67", P(12345.67));
 }
 

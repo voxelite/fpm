@@ -314,7 +314,8 @@ TYPED_TEST(fraction, floating_point)
 		EXPECT_EQ(P{0.5}, P{4503599627370495.5});    // 2^52 - 0.5
 		EXPECT_EQ(P{0.5}, P{-4503599627370495.5});
 		EXPECT_EQ(P{0.5}, P{8388607.5f});            // 2^23 - 0.5
-		EXPECT_EQ(P{0.5}, P{9223372036854775807.5L - 4611686018427387904.0L}); // 2^62 - 0.5, for 64 bits of precision
+		if(std::numeric_limits<long double>::digits >= 64)
+			EXPECT_EQ(P{0.5}, P{9223372036854775807.5L - 4611686018427387904.0L}); // 2^62 - 0.5, for 64 bits of precision
 
 #ifndef FPM_FRACTION_STRICT
 		static_assert(P{1.25} == P{0.25} && P{-0.25} == P{0.75} && P{1e30} == P{} && P{-3.0f} == P{});
@@ -513,7 +514,8 @@ TYPED_TEST(fraction, hash_and_order)
 		EXPECT_EQ(hash(x), hash(P::from_raw_value(x.raw_value())));
 		EXPECT_EQ(hash(x), std::hash<typename P::base_type>{}(x.raw_value()));
 	}
-	EXPECT_NE(hash(P{0.25}), hash(P{0.75}));
+	// (Values that differ in their lowest bits: a hash of 32 bits can drop the others, which it does for 64-bit integers)
+	EXPECT_NE(hash(P::from_raw_value(1)), hash(P::from_raw_value(2)));
 
 	// The order of the values in [0, 1): std::less and the like use the operators
 	EXPECT_TRUE(std::less<P>{}(P{0.25}, P{0.75}));
