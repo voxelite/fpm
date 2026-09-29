@@ -83,7 +83,7 @@ namespace
 		"{:12}", "{:<12}", "{:>12}", "{:^12}", "{:*<12.3f}", "{:_>12.3f}", "{:#^13.2e}", "{:012.4f}", "{:012}",
 		"{:+}", "{:+.2f}", "{: .2f}", "{:-.2f}", "{:+012.3f}", "{: 012.3e}",
 		"{:#}", "{:#.0f}", "{:#.0e}", "{:#.3g}", "{:#g}", "{:#a}", "{:#.0a}",
-		"{:\u00e9^12.2f}",
+		"{:\xc3\xa9^12.2f}", // \u00e9 in UTF-8, as the standard libraries decode it: also where the string literals are not UTF-8 (MSVC)
 	};
 
 	std::wstring widen(const std::string_view text)
