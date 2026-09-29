@@ -5,7 +5,13 @@ project(fpm CXX)
 include(GNUInstallDirs)
 
 add_library(fpm INTERFACE)
-target_compile_features(fpm INTERFACE cxx_std_26)
+
+# C++26. CMake knows no C++26 mode of MSVC, nor of clang-cl before CMake 4.1: for them, their newest mode
+if(MSVC AND NOT "cxx_std_26" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+  target_compile_options(fpm INTERFACE -std:c++latest)
+else()
+  target_compile_features(fpm INTERFACE cxx_std_26)
+endif()
 
 target_include_directories(fpm INTERFACE include)
 

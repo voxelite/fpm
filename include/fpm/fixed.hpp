@@ -611,12 +611,13 @@ namespace fpm
 		template<std::floating_point T>
 		[[nodiscard]] inline static constexpr BaseType floating_to_raw(const T val) noexcept
 		{
-			// The conversion of a number beyond the range of the base type is undefined (and not the same for every platform)
-			const T scaled = val * static_cast<T>(RAW_ONE);
-			constexpr T limit = detail::power_of_two<T>(std::numeric_limits<BaseType>::digits);
-			constexpr T lowest = std::is_signed_v<BaseType> ? -limit : T{-1};
-			if(scaled < limit && (std::is_signed_v<BaseType> ? scaled >= lowest : scaled > lowest)) [[likely]]
+			// The conversion of a number beyond the range of the base type is undefined (and not the same for every platform).
+			// The range is checked before the scaling, which is exact but could overflow (and is then not a constant expression).
+			constexpr T limit = detail::power_of_two<T>(std::numeric_limits<BaseType>::digits - static_cast<int32_t>(FractionBits));
+			constexpr T lowest = std::is_signed_v<BaseType> ? -limit : T{-1} / static_cast<T>(RAW_ONE);
+			if(val < limit && (std::is_signed_v<BaseType> ? val >= lowest : val > lowest)) [[likely]]
 			{
+				const T scaled = val * static_cast<T>(RAW_ONE);
 				const auto whole = static_cast<BaseType>(scaled); // truncated
 				if constexpr(EnableRounding)
 				{
