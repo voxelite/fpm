@@ -164,8 +164,8 @@ namespace
 		long double whole = std::floor(scaled);
 		if(P::enable_rounding && scaled - whole >= 0.5L)
 			whole += 1;
-		const auto magnitude = static_cast<unsigned __int128>(whole); // 2^bits at most
-		return static_cast<B>(value < 0 ? -magnitude : magnitude);
+		const auto magnitude = static_cast<uint64_t>(std::fmod(whole, std::ldexp(1.0L, bits))); // 2^bits (rounded up to) is 0
+		return static_cast<B>(value < 0 ? 0 - magnitude : magnitude);
 	}
 
 	template<typename P, typename T>
@@ -258,7 +258,7 @@ TEST(conversion, float_beyond_range)
 	EXPECT_EQ(P{0}, P{1e300});
 
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = P{std::numeric_limits<double>::infinity()}, "");
-	EXPECT_DEATH(auto v = P{std::numeric_limits<float>::quiet_NaN()}, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = P{std::numeric_limits<double>::infinity()}, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = P{std::numeric_limits<float>::quiet_NaN()}, "");
 #endif
 }

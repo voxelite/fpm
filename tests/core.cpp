@@ -25,8 +25,8 @@ namespace
 		return values;
 	}
 
-#ifdef __SIZEOF_INT128__
-	using wide_t = __int128;
+#ifdef FPM_INT128
+	using wide_t = fpm::int128_t;
 
 	/// a / b rounded to nearest, ties away from zero (the library's rounding mode)
 	wide_t divide_round(const wide_t a, const wide_t b)
@@ -64,7 +64,7 @@ using CoreTypes = ::testing::Types<
 >;
 TYPED_TEST_SUITE(core, CoreTypes);
 
-#ifdef __SIZEOF_INT128__
+#ifdef FPM_INT128
 TYPED_TEST(core, multiplication_is_exactly_rounded)
 {
 	using P = TypeParam;
@@ -192,10 +192,10 @@ TYPED_TEST(core, division_by_zero_asserts)
 {
 	using P = TypeParam;
 	// Integer division by zero doesn't trap on every architecture (e.g. ARM64), so these must assert
-	EXPECT_DEATH(auto v = P(1) / P(0), "");
-	EXPECT_DEATH(auto v = P(1) / 0, "");
-	EXPECT_DEATH({ auto v = P(1); v /= P(0); }, "");
-	EXPECT_DEATH({ auto v = P(1); v /= 0; }, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = P(1) / P(0), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = P(1) / 0, "");
+	EXPECT_DEATH_IF_SUPPORTED({ auto v = P(1); v /= P(0); }, "");
+	EXPECT_DEATH_IF_SUPPORTED({ auto v = P(1); v /= 0; }, "");
 }
 #endif
 

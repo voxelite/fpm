@@ -45,7 +45,9 @@ namespace
 	/// Whether the results of the operators wrap around
 	constexpr bool wraps = fpm::detail::defined_overflow && !fpm::detail::checked_overflow;
 
-	using wide = __int128;
+#ifdef FPM_INT128
+	// The exact results, which the tests below need (and are skipped without)
+	using wide = fpm::int128_t;
 
 	template<typename P>
 	constexpr wide range = wide{1} << (sizeof(typename P::base_type) * 8);
@@ -62,7 +64,7 @@ namespace
 	template<typename P>
 	typename P::base_type wrapped(const wide raw)
 	{
-		return static_cast<typename P::base_type>(static_cast<unsigned __int128>(raw));
+		return static_cast<typename P::base_type>(raw);
 	}
 
 	/// value / 2^bits like the operators: rounded to nearest (ties away from zero), or truncated towards zero
@@ -80,6 +82,7 @@ namespace
 			return quotient - 1;
 		return quotient;
 	}
+#endif
 
 	/// The ends of the range and their neighbours, small values, and random ones of every magnitude
 	template<typename P>
@@ -161,6 +164,7 @@ namespace
 #endif
 }
 
+#ifdef FPM_INT128
 TYPED_TEST(overflow, operators)
 {
 	using P = TypeParam;
@@ -230,6 +234,7 @@ TYPED_TEST(overflow, operators)
 		}
 	}
 }
+#endif
 
 // What every optimization level gives: the compiler may not assume that there is no overflow
 TYPED_TEST(overflow, comparisons_after_overflow)
@@ -251,6 +256,7 @@ TYPED_TEST(overflow, comparisons_after_overflow)
 	EXPECT_EQ(3, steps);
 }
 
+#ifdef FPM_INT128
 // With FPM_DEFINED_OVERFLOW the results of the mathematical functions that a type cannot represent saturate:
 // they are the maximum, or the lowest value for negative ones. This is the same with FPM_CHECK_OVERFLOW.
 TYPED_TEST(overflow, functions_saturate)
@@ -260,7 +266,7 @@ TYPED_TEST(overflow, functions_saturate)
 	using L = std::numeric_limits<P>;
 	if(!defined)
 		GTEST_SKIP() << "only with FPM_DEFINED_OVERFLOW";
-	const auto number = [](const P value) { return static_cast<long double>(value.raw_value()) / static_cast<long double>(wide{1} << P::fraction_bits); };
+	const auto number = [](const P value) { return std::ldexp(static_cast<long double>(value.raw_value()), -static_cast<int>(P::fraction_bits)); };
 	const long double unit = number(P::from_raw_value(1));
 	const long double largest = number(L::max());
 	const long double least = number(L::lowest());
@@ -351,6 +357,7 @@ TYPED_TEST(overflow, functions_saturate)
 		EXPECT_EQ(P{}, log2(P{1}));
 	}
 }
+#endif
 
 // The mathematical functions with the ends of the range and other values: their behavior is defined
 // (the sanitizers of the debug build report what is not)
@@ -464,6 +471,7 @@ TYPED_TEST(overflow, functions)
 	static_cast<void>(sink);
 }
 
+#ifdef FPM_INT128
 // Functions with an intermediate value that can be beyond the range while the result is not: 1 + x for log1p and
 // e^x for expm1. And the results of exp, exp2 and expm1 next to the maximum: they saturate, also where they round up to it.
 // None of them uses the operators, so this is the same with FPM_CHECK_OVERFLOW.
@@ -471,7 +479,7 @@ TYPED_TEST(overflow, functions_next_to_the_maximum)
 {
 	using P = TypeParam;
 	using B = typename P::base_type;
-	const auto number = [](const P value) { return static_cast<long double>(value.raw_value()) / static_cast<long double>(wide{1} << P::fraction_bits); };
+	const auto number = [](const P value) { return std::ldexp(static_cast<long double>(value.raw_value()), -static_cast<int>(P::fraction_bits)); };
 	const long double unit = number(P::from_raw_value(1));
 	const long double largest = number(std::numeric_limits<P>::max());
 	const long double least = number(std::numeric_limits<P>::lowest());
@@ -511,6 +519,7 @@ TYPED_TEST(overflow, functions_next_to_the_maximum)
 			expect("log1p", x, log1p(x), std::log1p(v));
 	}
 }
+#endif
 
 #if defined(FPM_CHECK_OVERFLOW) && !defined(NDEBUG)
 // With FPM_CHECK_OVERFLOW a result that the type cannot represent is an error
@@ -523,42 +532,42 @@ TYPED_TEST(overflow, checked)
 	const auto unit = P::from_raw_value(1);
 	const bool is_signed = std::is_signed_v<B>;
 
-	EXPECT_DEATH(auto v = max + unit, "");
-	EXPECT_DEATH(auto v = lowest - unit, "");
-	EXPECT_DEATH(auto v = max + max, "");
-	EXPECT_DEATH(auto v = max * 2, "");
-	EXPECT_DEATH(auto v = max * 2u, "");
-	EXPECT_DEATH(auto v = max * int64_t{1000000}, "");
-	EXPECT_DEATH(auto v = max * max, "");
-	EXPECT_DEATH(auto v = max / P::from_raw_value(static_cast<B>(B{1} << (P::fraction_bits - 1))), ""); // by 0.5
-	EXPECT_DEATH(auto v = max + 1, "");
-	EXPECT_DEATH(auto v = 1 + max, "");
-	EXPECT_DEATH(auto v = lowest - 1, "");
-	EXPECT_DEATH(auto v = nextafter(max, lowest) + unit + unit, "");
-	EXPECT_DEATH(P v = max; v += unit, "");
-	EXPECT_DEATH(P v = lowest; v -= unit, "");
-	EXPECT_DEATH(P v = max; v *= 3, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = max + unit, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = lowest - unit, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = max + max, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = max * 2, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = max * 2u, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = max * int64_t{1000000}, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = max * max, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = max / P::from_raw_value(static_cast<B>(B{1} << (P::fraction_bits - 1))), ""); // by 0.5
+	EXPECT_DEATH_IF_SUPPORTED(auto v = max + 1, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = 1 + max, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = lowest - 1, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = nextafter(max, lowest) + unit + unit, "");
+	EXPECT_DEATH_IF_SUPPORTED(P v = max; v += unit, "");
+	EXPECT_DEATH_IF_SUPPORTED(P v = lowest; v -= unit, "");
+	EXPECT_DEATH_IF_SUPPORTED(P v = max; v *= 3, "");
 	if(is_signed)
 	{
-		EXPECT_DEATH(auto v = -lowest, "");
-		EXPECT_DEATH(auto v = lowest / -1, "");
-		EXPECT_DEATH(auto v = lowest * -1, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = -lowest, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = lowest / -1, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = lowest * -1, "");
 		if(!defined)
-			EXPECT_DEATH(auto v = abs(lowest), "");
-		EXPECT_DEATH(auto v = lowest + lowest, "");
-		EXPECT_DEATH(auto v = 1 - lowest, "");
+			EXPECT_DEATH_IF_SUPPORTED(auto v = abs(lowest), "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = lowest + lowest, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = 1 - lowest, "");
 	}
 	else
 	{
 		// Negative
-		EXPECT_DEATH(auto v = -unit, "");
-		EXPECT_DEATH(auto v = P{} - unit, "");
-		EXPECT_DEATH(auto v = unit * -1, "");
-		EXPECT_DEATH(auto v = max / -1, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = -unit, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = P{} - unit, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = unit * -1, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = max / -1, "");
 	}
 	// An integer that the type cannot represent
-	EXPECT_DEATH(auto v = P{} + std::numeric_limits<int64_t>::max(), "");
-	EXPECT_DEATH(auto v = std::numeric_limits<int64_t>::max() - P{}, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = P{} + std::numeric_limits<int64_t>::max(), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = std::numeric_limits<int64_t>::max() - P{}, "");
 
 	// The ends of the range are results like any other
 	EXPECT_EQ(max, (max - unit) + unit);

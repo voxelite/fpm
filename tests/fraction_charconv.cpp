@@ -104,11 +104,11 @@ namespace
 		return ::testing::AssertionSuccess();
 	}
 
-#ifdef __SIZEOF_INT128__
+#ifdef FPM_INT128
 	/// The exact decimal expansion of numerator / 2^bits (below 1), with simple wide arithmetic: "0.5", "0.0625"
-	std::string exact_decimal(const unsigned __int128 numerator, const int bits)
+	std::string exact_decimal(const fpm::int128_t numerator, const int bits)
 	{
-		using wide = unsigned __int128;
+		using wide = fpm::int128_t;
 		const wide mask = (wide{1} << bits) - 1;
 		std::string text = "0.";
 		wide frac = numerator;
@@ -398,7 +398,7 @@ TYPED_TEST(fraction_charconv, shortest_is_minimal)
 	}
 }
 
-#ifdef __SIZEOF_INT128__
+#ifdef FPM_INT128
 TYPED_TEST(fraction_charconv, exact_digits)
 {
 	using P = TypeParam;
@@ -431,7 +431,7 @@ TYPED_TEST(fraction_charconv, rounds_to_nearest_even)
 		const P even = (x.raw_value() % 2 == 0) ? x : next;
 
 		// (2X + 1) / 2^(N+1)
-		const auto midpoint = exact_decimal((static_cast<unsigned __int128>(x.raw_value()) << 1) | 1, bits + 1);
+		const auto midpoint = exact_decimal((static_cast<fpm::int128_t>(x.raw_value()) << 1) | 1, bits + 1);
 		ASSERT_TRUE(parses_as(midpoint, even));
 		ASSERT_TRUE(parses_as(midpoint + "000", even));
 		ASSERT_TRUE(parses_as(midpoint + "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001", next));
@@ -446,7 +446,7 @@ TYPED_TEST(fraction_charconv, rounds_to_nearest_even)
 
 	// The midpoint below 1, and beyond: up to 1, which is 0 (and even)
 	const auto last = P::from_raw_value(std::numeric_limits<B>::max());
-	const auto midpoint = exact_decimal((static_cast<unsigned __int128>(last.raw_value()) << 1) | 1, bits + 1);
+	const auto midpoint = exact_decimal((static_cast<fpm::int128_t>(last.raw_value()) << 1) | 1, bits + 1);
 	EXPECT_TRUE(parses_as(midpoint, P{}));
 	EXPECT_TRUE(parses_as(midpoint + "1", P{}));
 	auto below = midpoint;
@@ -454,6 +454,20 @@ TYPED_TEST(fraction_charconv, rounds_to_nearest_even)
 	EXPECT_TRUE(parses_as(below, last));
 }
 #endif
+
+namespace
+{
+	/// snprintf of the C library. On MinGW its own one: the one of Windows has no `long double` (which is `double` there).
+	template<typename... Args>
+	void print(std::array<char, 256>& buffer, const char* format, const Args... args)
+	{
+#ifdef __MINGW32__
+		__mingw_snprintf(buffer.data(), buffer.size(), format, args...);
+#else
+		std::snprintf(buffer.data(), buffer.size(), format, args...);
+#endif
+	}
+}
 
 // Like printf, where `long double` represents the values exactly
 TYPED_TEST(fraction_charconv, precision_like_printf)
@@ -468,11 +482,11 @@ TYPED_TEST(fraction_charconv, precision_like_printf)
 		for(const int precision : {0, 1, 2, 3, 6, 10, 17, 30, 70})
 		{
 			std::array<char, 256> buffer{};
-			std::snprintf(buffer.data(), buffer.size(), "%.*Lf", precision, reference);
+			print(buffer, "%.*Lf", precision, reference);
 			ASSERT_EQ(std::string(buffer.data()), to_chars_string(x, std::chars_format::fixed, precision));
-			std::snprintf(buffer.data(), buffer.size(), "%.*Le", precision, reference);
+			print(buffer, "%.*Le", precision, reference);
 			ASSERT_EQ(std::string(buffer.data()), to_chars_string(x, std::chars_format::scientific, precision));
-			std::snprintf(buffer.data(), buffer.size(), "%.*Lg", precision, reference);
+			print(buffer, "%.*Lg", precision, reference);
 			ASSERT_EQ(std::string(buffer.data()), to_chars_string(x, std::chars_format::general, precision));
 		}
 
@@ -484,9 +498,9 @@ TYPED_TEST(fraction_charconv, precision_like_printf)
 			{
 				std::array<char, 256> buffer{};
 				if(precision < 0)
-					std::snprintf(buffer.data(), buffer.size(), "%a", value);
+					print(buffer, "%a", value);
 				else
-					std::snprintf(buffer.data(), buffer.size(), "%.*a", precision, value);
+					print(buffer, "%.*a", precision, value);
 				const std::string expected(buffer.data() + 2); // without "0x"
 				if(precision < 0)
 					ASSERT_EQ(expected, to_chars_string(x, std::chars_format::hex));

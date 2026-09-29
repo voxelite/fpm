@@ -74,8 +74,8 @@ TEST(power, log)
 	}
 
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = log(P(0)), "");
-	EXPECT_DEATH(auto v = log(P(-1)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = log(P(0)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = log(P(-1)), "");
 #endif
 }
 
@@ -104,8 +104,8 @@ TEST(power, log2)
 	}
 
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = log2(P(0)), "");
-	EXPECT_DEATH(auto v = log2(P(-1)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = log2(P(0)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = log2(P(-1)), "");
 #endif
 }
 
@@ -134,8 +134,8 @@ TEST(power, log10)
 	}
 
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = log10(P(0)), "");
-	EXPECT_DEATH(auto v = log10(P(-1)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = log10(P(0)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = log10(P(-1)), "");
 #endif
 }
 
@@ -164,8 +164,8 @@ TEST(power, log1p)
 	}
 
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = log1p(P(-1)), "");
-	EXPECT_DEATH(auto v = log1p(P(-2)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = log1p(P(-1)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = log1p(P(-2)), "");
 #endif
 }
 
@@ -221,7 +221,7 @@ TEST(power, pow)
 	EXPECT_EQ(P(1), pow(P(0), P(0)));
 	EXPECT_EQ(P(1), pow(P(-3), P(0)));
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = pow(P(0), P(-1)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = pow(P(0), P(-1)), "");
 #endif
 }
 
@@ -267,7 +267,7 @@ TEST(power, pow_int)
 	EXPECT_EQ(P(1), pow(P(0), 0));
 	EXPECT_EQ(P(1), pow(P(-3), 0));
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = pow(P(0), -1), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = pow(P(0), -1), "");
 #endif
 }
 
@@ -296,7 +296,7 @@ TEST(power, sqrt)
 	}
 
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = sqrt(P(-1)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = sqrt(P(-1)), "");
 #endif
 }
 

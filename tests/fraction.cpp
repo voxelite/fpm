@@ -209,7 +209,7 @@ TYPED_TEST(fraction, division)
 	}
 
 #ifndef NDEBUG
-	EXPECT_DEATH(auto v = P{0.5} / 0, "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = P{0.5} / 0, "");
 #endif
 }
 
@@ -285,9 +285,9 @@ TYPED_TEST(fraction, floating_point)
 	if(strict)
 	{
 #ifndef NDEBUG
-		EXPECT_DEATH(auto v = P{1.0}, "");
-		EXPECT_DEATH(auto v = P{-0.25}, "");
-		EXPECT_DEATH(auto v = P{1e30}, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = P{1.0}, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = P{-0.25}, "");
+		EXPECT_DEATH_IF_SUPPORTED(auto v = P{1e30}, "");
 #endif
 	}
 	else
@@ -563,9 +563,10 @@ TEST(fraction, other_bits)
 			}
 			else
 			{
-				// floor(x * 2^to + 1/2), modulo 2^to
+				// floor(x * 2^to + 1/2), modulo 2^to: the raw value shifted, plus the highest bit shifted out
 				constexpr int shift = (from > to) ? from - to : 1;
-				const auto expected = static_cast<B>(((static_cast<unsigned __int128>(x.raw_value()) + (static_cast<unsigned __int128>(1) << (shift - 1))) >> shift));
+				const auto raw = static_cast<uint64_t>(x.raw_value());
+				const auto expected = static_cast<B>((raw >> shift) + ((raw >> (shift - 1)) & 1));
 				ASSERT_EQ(expected, y.raw_value()) << static_cast<uint64_t>(x.raw_value());
 			}
 		}

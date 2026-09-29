@@ -75,13 +75,13 @@ namespace
 		return values;
 	}
 
-#ifdef __SIZEOF_INT128__
+#ifdef FPM_INT128
 	/// Exact expected raw value of M * 10^E for a fixed-point type, or `nullopt` if out of range.
 	/// Uses 128-bit arithmetic, so M must be < 10^12 and E in [-25, 6].
 	template<typename P>
 	std::optional<int64_t> exact_raw(const uint64_t mantissa, const int exponent10, const bool negative)
 	{
-		using U = unsigned __int128;
+		using U = fpm::int128_t;
 		using B = typename P::base_type;
 		constexpr auto F = P::fraction_bits;
 
@@ -237,7 +237,7 @@ TYPED_TEST(charconv, shortest_is_minimal)
 	}
 }
 
-#ifdef __SIZEOF_INT128__
+#ifdef FPM_INT128
 TYPED_TEST(charconv, from_chars_is_exact)
 {
 	using P = TypeParam;

@@ -375,7 +375,7 @@ TEST(fraction_math, domain)
 {
 	using A = fpm::fraction<uint16_t>;
 	using Q = fpm::fixed_16_16;
-	EXPECT_DEATH(auto v = fpm::asin<A>(Q(1.5)), "");
-	EXPECT_DEATH(auto v = fpm::acos<A>(Q(-1.5)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = fpm::asin<A>(Q(1.5)), "");
+	EXPECT_DEATH_IF_SUPPORTED(auto v = fpm::acos<A>(Q(-1.5)), "");
 }
 #endif
