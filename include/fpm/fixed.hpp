@@ -692,6 +692,23 @@ namespace fpm
 		inline constexpr fixed& operator/=(const fixed& y) noexcept
 		{
 			assert(y.m_value != 0);
+			// A whole divisor n, like in `x / 2`: x * 2^FractionBits / (n * 2^FractionBits) is x / n, a division in the base type
+			// instead of the intermediate one. The same result as below: the quotient with one more bit, 2x / n, is 2q plus the
+			// rounding bit, which the rest r gives. Not for -1, whose quotient of the lowest value does not fit.
+			constexpr BaseType fraction_mask = static_cast<BaseType>((BaseType(1) << FractionBits) - 1);
+			if(const BaseType n = static_cast<BaseType>(y.m_value >> FractionBits); (y.m_value & fraction_mask) == 0 && n != static_cast<BaseType>(-1))
+			{
+				BaseType quotient = static_cast<BaseType>(m_value / n);
+				if constexpr(EnableRounding)
+				{
+					// 2|r| >= |n|: the next bit is 1, which rounds away from zero
+					const BaseType rest = static_cast<BaseType>(m_value % n);
+					const BaseType up = detail::magnitude_of(rest) * 2 >= detail::magnitude_of(n) ? 1 : 0;
+					quotient = static_cast<BaseType>(detail::is_negative(m_value) != detail::is_negative(n) ? quotient - up : quotient + up);
+				}
+				m_value = quotient;
+				return *this;
+			}
 			// x * 2^FractionBits / y, with the numerator in the intermediate type
 			if constexpr(EnableRounding)
 			{
