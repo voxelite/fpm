@@ -25,6 +25,6 @@ jobs:
 # Only the tests: the benchmark and accuracy tools download other libraries
 script:
   - set -e
-  - cmake -B build -DCMAKE_BUILD_TYPE=$CONFIG -DCMAKE_CXX_COMPILER=$COMPILER -DFPM_BUILD_BENCHMARK=OFF -DFPM_BUILD_ACCURACY=OFF -DFPM_BUILD_MODULE=OFF
+  - cmake -B build -DCMAKE_BUILD_TYPE=$CONFIG -DCMAKE_CXX_COMPILER=$COMPILER -DFPM_BUILD_BENCHMARK=OFF -DFPM_BUILD_ACCURACY=OFF
   - cmake --build build --parallel
   - ctest --test-dir build --output-on-failure

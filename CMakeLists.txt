@@ -46,12 +46,12 @@ if(FPM_CHECK_OVERFLOW)
   target_compile_definitions(fpm INTERFACE FPM_CHECK_OVERFLOW)
 endif()
 
-# The module `fpm` (`import fpm;`), for the generators that support modules (Ninja, Visual Studio). It is compiled with
-# the options above, not with the ones of the code that imports it.
-option(FPM_BUILD_MODULE "Build the module fpm (import fpm;)" ON)
+# The modules `fpm.fixed` and `fpm.fraction` (`import fpm.fixed;`), for the generators that support modules (Ninja,
+# Visual Studio). They are compiled with the options above, not with the ones of the code that imports them.
+option(FPM_BUILD_MODULE "Build the modules fpm.fixed and fpm.fraction (import fpm.fixed;)" OFF)
 if(FPM_BUILD_MODULE)
   add_library(fpm-module)
-  target_sources(fpm-module PUBLIC FILE_SET CXX_MODULES FILES modules/fpm.cppm)
+  target_sources(fpm-module PUBLIC FILE_SET CXX_MODULES FILES modules/fixed.cppm modules/fraction.cppm)
   # C++20 at least, for the modules (fpm brings C++26, or the newest mode where CMake knows no C++26)
   target_compile_features(fpm-module PUBLIC cxx_std_20)
   target_link_libraries(fpm-module PUBLIC fpm)
@@ -105,9 +105,9 @@ if(FPM_BUILD_TESTS)
   # A single test: the suite has tens of thousands of (parametrized) cases, too many for one process each
   add_test(NAME fpm-test COMMAND fpm-test)
 
-  # The module: that `import fpm;` gives what the headers give
+  # The modules: that `import fpm.fixed;` and `import fpm.fraction;` give what the headers give
   if(FPM_BUILD_MODULE)
-    add_executable(fpm-module-test tests/module.cpp)
+    add_executable(fpm-module-test tests/module_fixed.cpp tests/module_fraction.cpp tests/module_fixed_fraction.cpp)
     target_link_libraries(fpm-module-test PRIVATE fpm-module gtest_main)
     add_test(NAME fpm-module-test COMMAND fpm-module-test)
   endif()

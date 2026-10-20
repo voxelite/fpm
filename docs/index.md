@@ -17,16 +17,19 @@ Every type has its own header, and a directory of that name with the headers for
 | `std::format` | `<fpm/fixed/format.hpp>` | `<fpm/fraction/format.hpp>` |
 | Stream operators | `<fpm/fixed/ios.hpp>` | `<fpm/fraction/ios.hpp>` |
 
-### Module
-The module `fpm` has all of them: link the CMake target `fpm-module` (the CMake option `FPM_BUILD_MODULE`, on by default,
-for a generator that supports modules, like Ninja) and import it.
+### Modules
+The modules `fpm.fixed` and `fpm.fraction` have all of the headers of their type: link the CMake target `fpm-module`
+(with the CMake option `FPM_BUILD_MODULE=ON`, for a generator that supports modules, like Ninja) and import them.
+`fpm.fraction` does not export `fpm::fixed`: import `fpm.fixed` as well for the functions of fractions that take or give fixed-point numbers.
 ```c++
-import fpm;
+import fpm.fixed;
+import fpm.fraction;
 
 auto x = fpm::cos(fpm::fixed_16_16{1});
+auto y = fpm::sin<fpm::fixed_16_16>(fpm::fraction<uint16_t>{0.25});
 ```
-It is compiled with the options of the library, not with the macros of the code that imports it,
-and exports no macros: where the module has 128-bit integers, it exports `fpm::int128_t`, but `FPM_INT128` is not
+They are compiled with the options of the library, not with the macros of the code that imports them,
+and export no macros: where `fpm.fixed` has 128-bit integers, it exports `fpm::int128_t`, but `FPM_INT128` is not
 visible to the code that imports it.
 
 ## Usage
