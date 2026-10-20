@@ -17,6 +17,18 @@ Every type has its own header, and a directory of that name with the headers for
 | `std::format` | `<fpm/fixed/format.hpp>` | `<fpm/fraction/format.hpp>` |
 | Stream operators | `<fpm/fixed/ios.hpp>` | `<fpm/fraction/ios.hpp>` |
 
+### Module
+The module `fpm` has all of them: link the CMake target `fpm-module` (the CMake option `FPM_BUILD_MODULE`, on by default,
+for a generator that supports modules, like Ninja) and import it.
+```c++
+import fpm;
+
+auto x = fpm::cos(fpm::fixed_16_16{1});
+```
+It is compiled with the options of the library, not with the macros of the code that imports it,
+and exports no macros: where the module has 128-bit integers, it exports `fpm::int128_t`, but `FPM_INT128` is not
+visible to the code that imports it.
+
 ## Usage
 `fpm` defines the `fpm::fixed` class, which is templated on the underlying integer type and the number of bits in the fraction:
 ```c++

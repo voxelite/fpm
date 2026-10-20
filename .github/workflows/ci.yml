@@ -13,6 +13,8 @@ env:
   CTEST_OUTPUT_ON_FAILURE: 1
   # Only the tests: the benchmark and accuracy tools download other libraries (see the job "tools")
   CMAKE_OPTIONS: -DFPM_BUILD_BENCHMARK=OFF -DFPM_BUILD_ACCURACY=OFF
+  # The module is built (with Ninja, or the Visual Studio generator) for x86-64 Linux and Windows only
+  NO_MODULE: -DFPM_BUILD_MODULE=OFF
 
 # Every platform is built with the options of the library (`library` below): the ones for the results that a type cannot
 # represent, FPM_DEFINED_OVERFLOW and (where there are assertions, so not for the Release builds) FPM_CHECK_OVERFLOW, and
@@ -42,9 +44,12 @@ jobs:
             library: -DFPM_DEFINED_OVERFLOW=ON -DFPM_CHECK_OVERFLOW=ON
     steps:
       - uses: actions/checkout@v4
+      # (clang-scan-deps finds the modules that Clang's sources use)
+      - name: Install packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang-tools-18
       - name: Configure
         run: >
-          cmake -B build
+          cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
           ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
@@ -104,15 +109,15 @@ jobs:
             cxx: g++-14
             build: Release
             flags: -m32 -msse2 -mfpmath=sse
+            options: -DFPM_BUILD_MODULE=OFF
             packages: g++-14-multilib
     steps:
       - uses: actions/checkout@v4
       - name: Install packages
-        if: matrix.packages
-        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang-tools-18 ${{ matrix.packages }}
       - name: Configure
         run: >
-          cmake -B build
+          cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
           "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}"
@@ -196,7 +201,7 @@ jobs:
           cmake -B build
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
-          ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
+          ${{ env.CMAKE_OPTIONS }} ${{ env.NO_MODULE }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -236,7 +241,7 @@ jobs:
           -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.processor }}
           -DCMAKE_CXX_COMPILER=${{ matrix.triple }}-g++-14
           "-DCMAKE_CROSSCOMPILING_EMULATOR=${{ matrix.emulator }};-L;/usr/${{ matrix.triple }}"
-          ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
+          ${{ env.CMAKE_OPTIONS }} ${{ env.NO_MODULE }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -363,7 +368,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DCMAKE_CXX_FLAGS=-fexceptions
           -DCMAKE_EXE_LINKER_FLAGS=-fexceptions
-          ${{ env.CMAKE_OPTIONS }} ${{ matrix.library }}
+          ${{ env.CMAKE_OPTIONS }} ${{ env.NO_MODULE }} ${{ matrix.library }}
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -401,7 +406,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18 -DFPM_BUILD_TESTS=OFF
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18 -DFPM_BUILD_TESTS=OFF ${{ env.NO_MODULE }}
       - name: Build
         run: cmake --build build --parallel
       - name: Accuracy

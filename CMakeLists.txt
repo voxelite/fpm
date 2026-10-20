@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.28)
 
 project(fpm CXX)
 
@@ -44,6 +44,17 @@ endif()
 option(FPM_CHECK_OVERFLOW "The results of the operators of fpm::fixed must be ones that the type can represent" OFF)
 if(FPM_CHECK_OVERFLOW)
   target_compile_definitions(fpm INTERFACE FPM_CHECK_OVERFLOW)
+endif()
+
+# The module `fpm` (`import fpm;`), for the generators that support modules (Ninja, Visual Studio). It is compiled with
+# the options above, not with the ones of the code that imports it.
+option(FPM_BUILD_MODULE "Build the module fpm (import fpm;)" ON)
+if(FPM_BUILD_MODULE)
+  add_library(fpm-module)
+  target_sources(fpm-module PUBLIC FILE_SET CXX_MODULES FILES modules/fpm.cppm)
+  # C++20 at least, for the modules (fpm brings C++26, or the newest mode where CMake knows no C++26)
+  target_compile_features(fpm-module PUBLIC cxx_std_20)
+  target_link_libraries(fpm-module PUBLIC fpm)
 endif()
 
 # Tests, benchmarks and the accuracy tool are only built by default if this is the top-level project
@@ -93,6 +104,13 @@ if(FPM_BUILD_TESTS)
 
   # A single test: the suite has tens of thousands of (parametrized) cases, too many for one process each
   add_test(NAME fpm-test COMMAND fpm-test)
+
+  # The module: that `import fpm;` gives what the headers give
+  if(FPM_BUILD_MODULE)
+    add_executable(fpm-module-test tests/module.cpp)
+    target_link_libraries(fpm-module-test PRIVATE fpm-module gtest_main)
+    add_test(NAME fpm-module-test COMMAND fpm-module-test)
+  endif()
 
 endif()
 
